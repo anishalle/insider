@@ -4,11 +4,14 @@
 .venv/
 __pycache__/
 *.pyc
+.conda/
 
 artifacts/
 data/
 logs/
 outputs/
+markout_outputs/
 tmp/
+main.ipynb
 
 *.egg-info/

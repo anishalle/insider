@@ -1,0 +1,41 @@
+[inputs]
+trades_path = "/home/axa230262/scratch/insider/trades.parquet"
+markets_path = "/home/axa230262/scratch/insider/markets.parquet"
+
+[output]
+root = "/home/axa230262/scratch/insider/processed"
+prepared_dirname = "prepared_trades"
+labeled_dirname = "labeled_user_trades"
+sequence_dirname = "sequence_dataset"
+manifest_dirname = "manifests"
+
+[runtime]
+threads = 32
+memory_limit = "192GB"
+temp_directory = "/home/axa230262/scratch/insider/processed/tmp/duckdb"
+preserve_insertion_order = false
+
+[label]
+horizon_minutes = 5
+usd_decimals = 6
+token_decimals = 6
+
+[sequence]
+length = 64
+stride = 16
+feature_order = [
+  "price_yes",
+  "signed_token_amount",
+  "usd_amount",
+  "side",
+  "role_is_maker",
+  "time_delta_seconds",
+  "market_age_seconds",
+]
+train_ratio = 0.8
+validation_ratio = 0.1
+test_ratio = 0.1
+
+[smoke]
+start = "2024-10-01T00:00:00Z"
+end = "2024-10-03T00:00:00Z"

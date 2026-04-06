@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "insider"
+version = "0.1.0"
+description = "Memory-conscious preprocessing pipeline for Polymarket insider-trading research."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "duckdb>=1.2.2",
+  "pyarrow>=18.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+]
+
+[project.scripts]
+insider = "insider.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

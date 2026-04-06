@@ -8,5 +8,5 @@ cd "$repo_dir"
 git fetch origin
 git checkout "$branch"
 git pull --ff-only origin "$branch"
-uv sync --extra dev
+bash scripts/bootstrap-juno-env.sh
 mkdir -p logs

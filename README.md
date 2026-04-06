@@ -35,4 +35,6 @@ sbatch jobs/run-dev.sbatch
 sbatch jobs/run-normal.sbatch
 ```
 
+Juno currently has a broken `uv` binary in the shell path, so the remote scripts bootstrap a repo-local `.venv` with `python3 -m venv` instead of relying on `uv` there.
+
 See [pipeline.md](/Users/ani/workspaces/github.com/anishalle/insider/docs/pipeline.md) for stage-level details.

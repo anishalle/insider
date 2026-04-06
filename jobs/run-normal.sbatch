@@ -13,5 +13,6 @@ set -euo pipefail
 cd "$HOME/work/001 research/insider"
 mkdir -p logs
 
-uv sync --extra dev
-uv run insider run-pipeline --config configs/pipeline.toml --overwrite
+bash scripts/bootstrap-juno-env.sh
+. .venv/bin/activate
+python -m insider run-pipeline --config configs/pipeline.toml --overwrite

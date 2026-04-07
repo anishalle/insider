@@ -158,8 +158,8 @@ def _train_model(
         train_loss_total = 0.0
         train_rows = 0
         for batch in _iter_training_batches(dataset_dir, batch_size=batch_size, seed=seed + epoch):
-            features = torch.as_tensor(batch[1], dtype=torch.float32, device=device)
-            labels = torch.as_tensor(batch[2], dtype=torch.float32, device=device)
+            features = torch.as_tensor(batch.features, dtype=torch.float32, device=device)
+            labels = torch.as_tensor(batch.labels, dtype=torch.float32, device=device)
             optimizer.zero_grad(set_to_none=True)
             logits = model(features)
             loss = criterion(logits, labels)
@@ -222,11 +222,11 @@ def _predict_split(
     probability_batches: List[np.ndarray] = []
     with torch.no_grad():
         for batch in iter_split_batches(dataset_dir, split, batch_size=batch_size):
-            features = torch.as_tensor(batch[1], dtype=torch.float32, device=device)
+            features = torch.as_tensor(batch.features, dtype=torch.float32, device=device)
             logits = model(features)
             probabilities = torch.sigmoid(logits).detach().cpu().numpy()
-            window_ids.extend(batch[0])
-            label_batches.append(batch[2])
+            window_ids.extend(batch.window_ids)
+            label_batches.append(batch.labels)
             probability_batches.append(probabilities)
     labels = np.concatenate(label_batches, axis=0) if label_batches else np.zeros((0,), dtype=np.int64)
     probabilities = (
@@ -236,8 +236,6 @@ def _predict_split(
 
 
 def _iter_training_batches(dataset_dir: Path, batch_size: int, seed: int):
-    from rnn.data import iter_split_batches
-
     for batch in iter_split_batches(
         dataset_dir,
         "train",
@@ -246,7 +244,7 @@ def _iter_training_batches(dataset_dir: Path, batch_size: int, seed: int):
         shuffle_rows=True,
         seed=seed,
     ):
-        yield batch.window_ids, batch.features, batch.labels
+        yield batch
 
 
 def _resolve_device(device_name: Optional[str]) -> torch.device:

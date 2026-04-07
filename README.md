@@ -43,4 +43,5 @@ sbatch jobs/analysis/run-visualize-signals-dev.sbatch
 Juno currently has a broken `uv` binary in the shell path, so the remote scripts bootstrap a repo-local `.venv` with `python3 -m venv` instead of relying on `uv` there.
 
 See [pipeline.md](/Users/ani/workspaces/github.com/anishalle/insider/docs/pipeline.md) for stage-level details.
+See [models.md](/Users/ani/workspaces/github.com/anishalle/insider/docs/models.md) for model-training details and Juno job usage.
 See [visualize-signals.md](/Users/ani/workspaces/github.com/anishalle/insider/docs/visualize-signals.md) for the Juno analysis workflow.

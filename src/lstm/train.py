@@ -21,6 +21,10 @@ from modeling_common.sequence_scaling import (
     SequenceStandardizationStats,
     SequenceStandardizer,
     apply_sequence_standardization,
+    build_default_clip_enabled,
+    build_default_scale_enabled,
+    build_default_transform_kinds,
+    transform_sequence_features,
 )
 
 try:
@@ -33,6 +37,8 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.9 on Juno
 
 
 SPLITS: Tuple[str, str, str] = ("train", "validation", "test")
+DEFAULT_CLIP_PERCENTILES: Tuple[float, float] = (0.5, 99.5)
+DEFAULT_CLIP_SAMPLE_ROWS = 250000
 
 
 @dataclass(frozen=True)
@@ -354,10 +360,88 @@ def fit_train_standardizer(
     feature_order: Sequence[str],
     batch_size: int,
 ) -> SequenceStandardizationStats:
-    standardizer = SequenceStandardizer(feature_order)
+    transform_kinds = build_default_transform_kinds(feature_order)
+    clip_enabled = build_default_clip_enabled(feature_order)
+    scale_enabled = build_default_scale_enabled(feature_order)
+    clip_lower, clip_upper, clip_sample_rows = estimate_train_clip_bounds(
+        dataset_dir,
+        feature_order,
+        batch_size=batch_size,
+        transform_kinds=transform_kinds,
+        clip_enabled=clip_enabled,
+        clip_percentiles=DEFAULT_CLIP_PERCENTILES,
+        sample_rows=DEFAULT_CLIP_SAMPLE_ROWS,
+    )
+    standardizer = SequenceStandardizer(
+        feature_order,
+        transform_kinds=transform_kinds,
+        clip_lower=clip_lower,
+        clip_upper=clip_upper,
+        scale_enabled=scale_enabled,
+        clip_enabled=clip_enabled,
+        clip_percentiles=DEFAULT_CLIP_PERCENTILES,
+        clip_sample_rows=clip_sample_rows,
+    )
     for _, features, _ in iter_split_batches(dataset_dir, "train", batch_size):
         standardizer.update(features)
     return standardizer.finalize()
+
+
+def estimate_train_clip_bounds(
+    dataset_dir: Path,
+    feature_order: Sequence[str],
+    *,
+    batch_size: int,
+    transform_kinds: Sequence[str],
+    clip_enabled: np.ndarray,
+    clip_percentiles: Tuple[float, float],
+    sample_rows: int,
+) -> Tuple[np.ndarray, np.ndarray, int]:
+    feature_count = len(feature_order)
+    enabled = np.asarray(clip_enabled, dtype=bool)
+    if sample_rows <= 0 or not bool(enabled.any()):
+        return (
+            np.full(feature_count, -np.inf, dtype=np.float32),
+            np.full(feature_count, np.inf, dtype=np.float32),
+            0,
+        )
+
+    samples: List[np.ndarray] = []
+    rows_collected = 0
+    for _, features, _ in iter_split_batches(
+        dataset_dir,
+        "train",
+        batch_size,
+        shuffle_files=True,
+        shuffle_rows=True,
+        seed=0,
+    ):
+        transformed = transform_sequence_features(features, transform_kinds).reshape(-1, feature_count)
+        remaining = sample_rows - rows_collected
+        if remaining <= 0:
+            break
+        take_count = min(remaining, transformed.shape[0])
+        samples.append(np.asarray(transformed[:take_count], dtype=np.float32))
+        rows_collected += int(take_count)
+        if rows_collected >= sample_rows:
+            break
+
+    if not samples:
+        return (
+            np.full(feature_count, -np.inf, dtype=np.float32),
+            np.full(feature_count, np.inf, dtype=np.float32),
+            0,
+        )
+
+    sample_matrix = np.concatenate(samples, axis=0)
+    lower = np.full(feature_count, -np.inf, dtype=np.float32)
+    upper = np.full(feature_count, np.inf, dtype=np.float32)
+    for index, should_clip in enumerate(enabled.tolist()):
+        if not should_clip:
+            continue
+        lower[index] = float(np.quantile(sample_matrix[:, index], clip_percentiles[0] / 100.0))
+        upper[index] = float(np.quantile(sample_matrix[:, index], clip_percentiles[1] / 100.0))
+    return lower, upper, int(sample_matrix.shape[0])
 
 
 def train_lstm(
@@ -568,6 +652,13 @@ def evaluate_split(
 
 def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argparse.Namespace, result: TrainResult) -> None:
     split_summaries = {split: summarize_split(config.dataset_dir, split, args.eval_batch_size).to_dict() for split in SPLITS}
+    feature_shift_report = build_feature_shift_report(
+        config.dataset_dir,
+        feature_order=config.feature_order,
+        batch_size=args.eval_batch_size,
+        feature_standardization=result.feature_standardization,
+        split_summaries=split_summaries,
+    )
     summary = {
         "model_name": "lstm",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -603,6 +694,7 @@ def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argpa
             "validation": int(result.validation_eval.metrics["row_count"]),
             "test": int(result.test_eval.metrics["row_count"]),
         },
+        "feature_shift_report_path": "feature_shift.json",
     }
     metrics = {
         "train": result.train_eval.metrics,
@@ -613,6 +705,7 @@ def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argpa
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str) + "\n")
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str) + "\n")
+    (run_dir / "feature_shift.json").write_text(json.dumps(feature_shift_report, indent=2, default=str) + "\n")
     if args.debug_metrics:
         reference_thresholds = {
             "default_0_5": 0.5,
@@ -692,6 +785,146 @@ def write_predictions_parquet(
         }
     )
     pq.write_table(table, path, compression="zstd")
+
+
+def build_feature_shift_report(
+    dataset_dir: Path,
+    *,
+    feature_order: Sequence[str],
+    batch_size: int,
+    feature_standardization: SequenceStandardizationStats,
+    split_summaries: Dict[str, Dict[str, object]],
+) -> Dict[str, object]:
+    split_payloads = {
+        split: summarize_feature_shift_split(
+            dataset_dir,
+            split,
+            batch_size=batch_size,
+            feature_order=feature_order,
+            feature_standardization=feature_standardization,
+            positive_rate=float(split_summaries[split]["positive_rate"]),
+        )
+        for split in SPLITS
+    }
+
+    train_payload = split_payloads["train"]
+    drift_vs_train: Dict[str, object] = {}
+    train_raw_features = {row["name"]: row for row in train_payload["raw_feature_summary"]}
+    train_preprocessed_features = {row["name"]: row for row in train_payload["preprocessed_feature_summary"]}
+    for split in ("validation", "test"):
+        current = split_payloads[split]
+        current_raw = {row["name"]: row for row in current["raw_feature_summary"]}
+        current_preprocessed = {row["name"]: row for row in current["preprocessed_feature_summary"]}
+        drift_vs_train[split] = {
+            "positive_rate_delta": float(current["positive_rate"]) - float(train_payload["positive_rate"]),
+            "features": [
+                {
+                    "name": feature_name,
+                    "raw_mean_delta": float(current_raw[feature_name]["mean"]) - float(train_raw_features[feature_name]["mean"]),
+                    "preprocessed_mean_delta": float(current_preprocessed[feature_name]["mean"])
+                    - float(train_preprocessed_features[feature_name]["mean"]),
+                }
+                for feature_name in feature_order
+            ],
+        }
+
+    return {
+        "feature_order": list(feature_order),
+        "window_size": int(train_payload["window_size"]),
+        "split_positive_rates": {split: float(split_payloads[split]["positive_rate"]) for split in SPLITS},
+        "splits": split_payloads,
+        "drift_vs_train": drift_vs_train,
+    }
+
+
+def summarize_feature_shift_split(
+    dataset_dir: Path,
+    split: str,
+    *,
+    batch_size: int,
+    feature_order: Sequence[str],
+    feature_standardization: SequenceStandardizationStats,
+    positive_rate: float,
+) -> Dict[str, object]:
+    feature_count = len(feature_order)
+    position_count: Optional[int] = None
+
+    raw_sum = np.zeros(feature_count, dtype=np.float64)
+    raw_sum_squares = np.zeros(feature_count, dtype=np.float64)
+    raw_min = np.full(feature_count, np.inf, dtype=np.float64)
+    raw_max = np.full(feature_count, -np.inf, dtype=np.float64)
+    raw_position_sum: Optional[np.ndarray] = None
+    raw_position_sum_squares: Optional[np.ndarray] = None
+
+    pre_sum = np.zeros(feature_count, dtype=np.float64)
+    pre_sum_squares = np.zeros(feature_count, dtype=np.float64)
+    pre_min = np.full(feature_count, np.inf, dtype=np.float64)
+    pre_max = np.full(feature_count, -np.inf, dtype=np.float64)
+
+    row_count = 0
+    for _, features, _ in iter_split_batches(dataset_dir, split, batch_size):
+        if position_count is None:
+            position_count = int(features.shape[1])
+            raw_position_sum = np.zeros((position_count, feature_count), dtype=np.float64)
+            raw_position_sum_squares = np.zeros((position_count, feature_count), dtype=np.float64)
+        raw_flat = np.asarray(features, dtype=np.float64).reshape(-1, feature_count)
+        raw_sum += raw_flat.sum(axis=0)
+        raw_sum_squares += np.square(raw_flat).sum(axis=0)
+        raw_min = np.minimum(raw_min, raw_flat.min(axis=0))
+        raw_max = np.maximum(raw_max, raw_flat.max(axis=0))
+        raw_position_sum += np.asarray(features, dtype=np.float64).sum(axis=0)
+        raw_position_sum_squares += np.square(np.asarray(features, dtype=np.float64)).sum(axis=0)
+
+        preprocessed = apply_sequence_standardization(features, feature_standardization)
+        pre_flat = np.asarray(preprocessed, dtype=np.float64).reshape(-1, feature_count)
+        pre_sum += pre_flat.sum(axis=0)
+        pre_sum_squares += np.square(pre_flat).sum(axis=0)
+        pre_min = np.minimum(pre_min, pre_flat.min(axis=0))
+        pre_max = np.maximum(pre_max, pre_flat.max(axis=0))
+        row_count += int(features.shape[0])
+
+    if position_count is None or raw_position_sum is None or raw_position_sum_squares is None:
+        raise ValueError("Unable to summarize feature shift for split=%s" % split)
+
+    total_steps = max(row_count * position_count, 1)
+    raw_feature_summary = []
+    preprocessed_feature_summary = []
+    for index, feature_name in enumerate(feature_order):
+        raw_mean = raw_sum[index] / total_steps
+        raw_variance = max(raw_sum_squares[index] / total_steps - raw_mean * raw_mean, 0.0)
+        pre_mean = pre_sum[index] / total_steps
+        pre_variance = max(pre_sum_squares[index] / total_steps - pre_mean * pre_mean, 0.0)
+        raw_feature_summary.append(
+            {
+                "name": feature_name,
+                "mean": float(raw_mean),
+                "std": float(np.sqrt(raw_variance)),
+                "min": float(raw_min[index]),
+                "max": float(raw_max[index]),
+                "position_mean": (raw_position_sum[:, index] / max(row_count, 1)).astype(np.float64).tolist(),
+                "position_std": np.sqrt(
+                    np.maximum(raw_position_sum_squares[:, index] / max(row_count, 1) - np.square(raw_position_sum[:, index] / max(row_count, 1)), 0.0)
+                ).astype(np.float64).tolist(),
+            }
+        )
+        preprocessed_feature_summary.append(
+            {
+                "name": feature_name,
+                "mean": float(pre_mean),
+                "std": float(np.sqrt(pre_variance)),
+                "min": float(pre_min[index]),
+                "max": float(pre_max[index]),
+            }
+        )
+
+    return {
+        "split": split,
+        "row_count": int(row_count),
+        "positive_rate": float(positive_rate),
+        "window_size": int(position_count),
+        "raw_feature_summary": raw_feature_summary,
+        "preprocessed_feature_summary": preprocessed_feature_summary,
+    }
 
 
 if __name__ == "__main__":

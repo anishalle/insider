@@ -15,6 +15,7 @@ required = {
     "numpy": "numpy>=2.0.0",
     "pyarrow": "pyarrow>=18.0.0",
     "sklearn": "scikit-learn>=1.5.0",
+    "xgboost": "xgboost>=2.1.0",
 }
 if sys.version_info < (3, 11):
     required["tomli"] = "tomli>=2.0.1"

@@ -11,7 +11,13 @@ from modeling_common.config import load_window_data_config
 from modeling_common.diagnostics import build_debug_diagnostics
 from modeling_common.dataset import iter_split_batches, summarize_dataset
 from modeling_common.metrics import binary_classification_metrics, brier_score_loss, pr_auc_score, roc_auc_score
-from modeling_common.sequence_scaling import SequenceStandardizer, apply_sequence_standardization
+from modeling_common.sequence_scaling import (
+    SequenceStandardizer,
+    apply_sequence_standardization,
+    build_default_clip_enabled,
+    build_default_scale_enabled,
+    build_default_transform_kinds,
+)
 
 
 def test_load_window_data_config_reads_output_and_window_defaults(tmp_path: Path) -> None:
@@ -105,7 +111,7 @@ def test_sequence_standardizer_uses_train_only_stats() -> None:
     )
     validation_features = np.asarray([[[101.0, 1000.0], [103.0, 1004.0]]], dtype=np.float32)
 
-    standardizer = SequenceStandardizer(("price_yes", "time_delta_seconds"))
+    standardizer = SequenceStandardizer(("price_yes", "custom_continuous_feature"))
     standardizer.update(train_features)
     stats = standardizer.finalize()
 
@@ -117,6 +123,39 @@ def test_sequence_standardizer_uses_train_only_stats() -> None:
     assert np.allclose(np.round(stats.scale, 6), np.asarray([2.236068, 4.472136], dtype=np.float32))
     assert np.allclose(transformed_train.reshape(-1, 2).mean(axis=0), np.zeros(2), atol=1e-6)
     assert transformed_validation[0, 0, 0] > 40.0
+
+
+def test_sequence_standardizer_supports_default_transforms_clipping_and_unscaled_binary_features() -> None:
+    features = np.asarray(
+        [
+            [[2.0, 0.0, 10.0], [-2.0, 1.0, 100.0]],
+            [[4.0, 0.0, 1000.0], [-4.0, 1.0, 10000.0]],
+        ],
+        dtype=np.float32,
+    )
+    feature_names = ("signed_token_amount", "role_is_maker", "time_delta_seconds")
+    standardizer = SequenceStandardizer(
+        feature_names,
+        transform_kinds=build_default_transform_kinds(feature_names),
+        clip_lower=np.asarray([-1.0, -np.inf, 0.0], dtype=np.float32),
+        clip_upper=np.asarray([1.0, np.inf, 3.0], dtype=np.float32),
+        scale_enabled=build_default_scale_enabled(feature_names),
+        clip_enabled=build_default_clip_enabled(feature_names),
+        clip_percentiles=(1.0, 99.0),
+        clip_sample_rows=8,
+    )
+    standardizer.update(features)
+    stats = standardizer.finalize()
+
+    transformed = apply_sequence_standardization(features, stats)
+
+    assert stats.transform_kinds == ("signed_log1p", "identity", "log1p")
+    assert stats.scale_enabled.tolist() == [True, False, True]
+    assert stats.clip_enabled.tolist() == [True, False, True]
+    assert np.allclose(np.unique(transformed[..., 1]), np.asarray([0.0, 1.0], dtype=np.float32))
+    assert np.isfinite(transformed).all()
+    assert float(np.abs(transformed[..., 0]).max()) <= 2.0
+    assert float(np.abs(transformed[..., 2]).max()) <= 2.0
 
 
 def test_debug_diagnostics_include_threshold_sweep_and_split_summaries() -> None:

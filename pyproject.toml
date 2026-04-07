@@ -12,6 +12,7 @@ dependencies = [
   "duckdb>=1.2.2",
   "matplotlib>=3.9.0",
   "pyarrow>=18.0.0",
+  "xgboost>=2.1.0",
 ]
 
 [project.optional-dependencies]

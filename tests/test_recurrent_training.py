@@ -119,10 +119,16 @@ def test_lstm_trainer_writes_expected_artifacts(tmp_path: Path, monkeypatch: pyt
     assert summary["feature_order"] == list(FEATURE_ORDER)
     assert summary["feature_standardization"]["enabled"] is True
     assert summary["model_config"]["debug_metrics"] is True
+    assert summary["feature_shift_report_path"] == "feature_shift.json"
     assert metrics["validation"]["row_count"] == 2
     assert metrics["test"]["row_count"] == 2
     assert metrics["validation"]["pr_auc"] >= 0.0
     assert (run_dir / "diagnostics.json").exists()
+    assert (run_dir / "feature_shift.json").exists()
+
+    shift = json.loads((run_dir / "feature_shift.json").read_text())
+    assert shift["split_positive_rates"]["train"] == summary["split_summaries"]["train"]["positive_rate"]
+    assert len(shift["splits"]["validation"]["raw_feature_summary"][0]["position_mean"]) == 2
 
 
 def _assert_common_artifacts(run_dir: Path) -> None:

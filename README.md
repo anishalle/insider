@@ -22,6 +22,7 @@ uv run insider prepare-trades --config configs/pipeline.toml --overwrite
 uv run insider label-user-trades --config configs/pipeline.toml --overwrite
 uv run insider build-sequences --config configs/pipeline.toml --overwrite
 uv run insider build-model-windows --config configs/pipeline.toml --window-size 50 --overwrite
+uv run insider visualize-signals --config configs/pipeline.toml --output-dir /home/axa230262/scratch/insider/analysis/signal-review
 uv run insider run-pipeline --config configs/pipeline.toml --overwrite
 uv run insider smoke-test --config configs/pipeline.toml --overwrite
 ```
@@ -36,8 +37,10 @@ mkdir -p logs
 sbatch jobs/preprocess/run-dev.sbatch
 sbatch jobs/preprocess/run-normal.sbatch
 sbatch jobs/windowing/run-window-50.sbatch
+sbatch jobs/analysis/run-visualize-signals-dev.sbatch
 ```
 
 Juno currently has a broken `uv` binary in the shell path, so the remote scripts bootstrap a repo-local `.venv` with `python3 -m venv` instead of relying on `uv` there.
 
 See [pipeline.md](/Users/ani/workspaces/github.com/anishalle/insider/docs/pipeline.md) for stage-level details.
+See [visualize-signals.md](/Users/ani/workspaces/github.com/anishalle/insider/docs/visualize-signals.md) for the Juno analysis workflow.

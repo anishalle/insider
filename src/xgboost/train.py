@@ -385,3 +385,7 @@ def _resolve_best_score(booster: Any, evals_result: Dict[str, Dict[str, List[flo
         except (TypeError, ValueError):
             pass
     return _best_validation_score(evals_result)
+
+
+if __name__ == "__main__":
+    main()

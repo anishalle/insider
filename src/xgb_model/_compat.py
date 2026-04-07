@@ -46,4 +46,3 @@ def _is_local_repo_path(entry: str, repo_root: Path, repo_src: Path) -> bool:
     except Exception:
         return False
     return resolved == repo_root or resolved == repo_src
-

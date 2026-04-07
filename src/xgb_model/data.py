@@ -68,4 +68,3 @@ def load_split_arrays(
             "Expected %d rows for split=%s, loaded %d rows." % (total_rows, split, features.shape[0])
         )
     return SplitArrays(window_ids=window_ids, features=features, labels=labels)
-

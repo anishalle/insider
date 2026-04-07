@@ -131,4 +131,3 @@ def _parse_toml_value(value_text: str) -> Any:
         return ast.literal_eval(lowered)
     except Exception:
         return value_text.strip('"')
-

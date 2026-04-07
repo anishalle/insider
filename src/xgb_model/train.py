@@ -12,16 +12,16 @@ from modeling_common.artifacts import write_predictions_parquet
 from modeling_common.metrics import binary_classification_metrics
 from modeling_common.dataset import summarize_dataset
 
-from xgboost._compat import load_external_xgboost
-from xgboost.artifacts import (
+from xgb_model._compat import load_external_xgboost
+from xgb_model.artifacts import (
     build_summary_payload,
     make_run_dir,
     write_history_csv,
     write_json,
     write_model_json,
 )
-from xgboost.config import WindowConfig, load_window_config
-from xgboost.data import build_flattened_feature_names, load_split_arrays
+from xgb_model.config import WindowConfig, load_window_config
+from xgb_model.data import build_flattened_feature_names, load_split_arrays
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ class TrainResult:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="xgboost.train", description="Train XGBoost on flattened model windows.")
+    parser = argparse.ArgumentParser(prog="xgb_model.train", description="Train XGBoost on flattened model windows.")
     parser.add_argument("--config", type=Path, required=True, help="Path to configs/pipeline.toml")
     parser.add_argument("--window-size", type=int, default=None, help="Model window size to train on.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Optional run directory override.")

@@ -82,4 +82,3 @@ def build_summary_payload(
         "class_weights": class_weights,
         "training_config": training_config,
     }
-

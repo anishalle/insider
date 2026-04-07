@@ -31,6 +31,6 @@ def test_recurrent_trainers_have_main_entrypoints() -> None:
 
 
 def test_xgboost_trainer_has_main_entrypoint() -> None:
-    from xgboost.train import main as xgboost_main
+    from xgb_model.train import main as xgboost_main
 
     assert callable(xgboost_main)

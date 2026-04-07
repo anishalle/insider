@@ -18,6 +18,6 @@ set -euo pipefail
 bash scripts/bootstrap-model-env.sh "$PWD"
 export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 
-python -m xgboost.train \
+python -m xgb_model.train \
   --config configs/pipeline.toml \
   --window-size 50

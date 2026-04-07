@@ -1,0 +1,81 @@
+{
+  "verdict": "feasible_with_weighting_or_sampling",
+  "class_imbalance": {
+    "majority_to_minority_ratio": 1.9256823935311402,
+    "monthly_positive_rate_range": 0.1855114453731405
+  },
+  "concentration": {
+    "users": {
+      "top_100_row_share": 0.23738962759724125,
+      "top_100_usd_share": 0.18479484239099617
+    },
+    "markets": {
+      "top_100_row_share": 0.11816237644289043,
+      "top_100_usd_share": 0.28220448365642414
+    }
+  },
+  "stream_length_buckets": [
+    {
+      "bucket": "001-009",
+      "stream_count": 37448480,
+      "avg_stream_len": 2.2957389725831328
+    },
+    {
+      "bucket": "010-024",
+      "stream_count": 2709784,
+      "avg_stream_len": 14.85704949176761
+    },
+    {
+      "bucket": "025-049",
+      "stream_count": 898199,
+      "avg_stream_len": 34.27286603525499
+    },
+    {
+      "bucket": "050-099",
+      "stream_count": 494391,
+      "avg_stream_len": 69.16031845239901
+    },
+    {
+      "bucket": "100+",
+      "stream_count": 422567,
+      "avg_stream_len": 291.5658132319845
+    }
+  ],
+  "window_readiness": {
+    "model_window_size": 50,
+    "stride": 16,
+    "estimated_from_labeled_trades": {
+      "stream_count": 41973421,
+      "eligible_stream_count": 916958,
+      "dense_window_count": 112467388,
+      "stride_window_count": 7484884
+    },
+    "actual_model_window_summary": {
+      "splits": [
+        {
+          "split": "test",
+          "row_count": 747919,
+          "positive_rate": 0.4431816814387654
+        },
+        {
+          "split": "train",
+          "row_count": 5985294,
+          "positive_rate": 0.36891704902048256
+        },
+        {
+          "split": "validation",
+          "row_count": 747974,
+          "positive_rate": 0.4366809541508127
+        }
+      ],
+      "shape": {
+        "min_window_size": 50,
+        "max_window_size": 50,
+        "min_feature_rows": 50,
+        "max_feature_rows": 50,
+        "min_feature_width": 7,
+        "max_feature_width": 7
+      }
+    }
+  }
+}

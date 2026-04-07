@@ -8,8 +8,10 @@ import pyarrow.parquet as pq
 
 from modeling_common.artifacts import build_summary_payload, prepare_run_directory
 from modeling_common.config import load_window_data_config
+from modeling_common.diagnostics import build_debug_diagnostics
 from modeling_common.dataset import iter_split_batches, summarize_dataset
-from modeling_common.metrics import binary_classification_metrics, roc_auc_score
+from modeling_common.metrics import binary_classification_metrics, brier_score_loss, pr_auc_score, roc_auc_score
+from modeling_common.sequence_scaling import SequenceStandardizer, apply_sequence_standardization
 
 
 def test_load_window_data_config_reads_output_and_window_defaults(tmp_path: Path) -> None:
@@ -91,6 +93,51 @@ def test_metrics_and_summary_payload_include_auc_and_counts(tmp_path: Path) -> N
     assert run_dir.exists()
     assert payload["window_size"] == 50
     assert payload["class_weights"] == {"negative": 1.0, "positive": 1.5}
+
+
+def test_sequence_standardizer_uses_train_only_stats() -> None:
+    train_features = np.asarray(
+        [
+            [[1.0, 10.0], [3.0, 14.0]],
+            [[5.0, 18.0], [7.0, 22.0]],
+        ],
+        dtype=np.float32,
+    )
+    validation_features = np.asarray([[[101.0, 1000.0], [103.0, 1004.0]]], dtype=np.float32)
+
+    standardizer = SequenceStandardizer(("price_yes", "time_delta_seconds"))
+    standardizer.update(train_features)
+    stats = standardizer.finalize()
+
+    transformed_train = apply_sequence_standardization(train_features, stats)
+    transformed_validation = apply_sequence_standardization(validation_features, stats)
+
+    assert stats.row_count == 4
+    assert np.allclose(stats.mean, np.asarray([4.0, 16.0], dtype=np.float32))
+    assert np.allclose(np.round(stats.scale, 6), np.asarray([2.236068, 4.472136], dtype=np.float32))
+    assert np.allclose(transformed_train.reshape(-1, 2).mean(axis=0), np.zeros(2), atol=1e-6)
+    assert transformed_validation[0, 0, 0] > 40.0
+
+
+def test_debug_diagnostics_include_threshold_sweep_and_split_summaries() -> None:
+    labels = np.asarray([0, 0, 1, 1], dtype=np.int64)
+    probabilities = np.asarray([0.1, 0.4, 0.6, 0.9], dtype=np.float64)
+    logits = np.log(probabilities / (1.0 - probabilities))
+
+    diagnostics = build_debug_diagnostics(
+        split_payloads={
+            "train": {"labels": labels, "probabilities": probabilities, "logits": logits},
+            "validation": {"labels": labels, "probabilities": probabilities, "logits": logits},
+            "test": {"labels": labels, "probabilities": probabilities, "logits": logits},
+        },
+        reference_thresholds={"default_0_5": 0.5, "class_weight_adjusted": 0.4},
+    )
+
+    assert diagnostics["reference_thresholds"]["default_0_5"] == 0.5
+    assert diagnostics["splits"]["validation"]["pr_auc"] == pr_auc_score(labels, probabilities)
+    assert diagnostics["splits"]["validation"]["brier_score"] == brier_score_loss(labels, probabilities)
+    assert diagnostics["splits"]["validation"]["metrics_at_reference_thresholds"]["default_0_5"]["f1"] > 0.0
+    assert diagnostics["validation_threshold_sweep"]["best_by_metric"]["accuracy"]["threshold"] >= 0.0
 
 
 def _write_split(path: Path, rows: list[tuple[str, list[list[list[float]]], list[int]]]) -> None:

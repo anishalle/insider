@@ -222,6 +222,7 @@ Implementation details:
 
 - standalone PyTorch trainer
 - consumes the same `50 x 7` sequence input as the RNN
+- applies train-only per-feature standardization before the LSTM sees the sequence
 - uses `nn.LSTM(batch_first=True)`
 - takes the final step output and applies a dropout + linear head
 - uses train-only positive-class weighting through `BCEWithLogitsLoss`
@@ -232,7 +233,8 @@ Default CLI:
 ```bash
 PYTHONPATH=src python -m lstm.train \
   --config configs/pipeline.toml \
-  --window-size 50
+  --window-size 50 \
+  --debug-metrics
 ```
 
 Default hyperparameters:
@@ -301,6 +303,12 @@ All three trainers write:
 - `predictions_validation.parquet`
 - `predictions_test.parquet`
 
+LSTM also optionally writes:
+
+- `diagnostics.json`
+
+Enable that artifact with `--debug-metrics`. It includes split-level probability and logit summaries, PR-AUC, Brier score, and a validation threshold sweep that makes weighted-loss runs easier to interpret.
+
 Prediction parquet schema:
 
 - `window_id`
@@ -345,6 +353,7 @@ Typical contents:
 - feature order
 - split summaries
 - class weights
+- feature standardization metadata for the LSTM trainer
 - hyperparameters or model config
 - best epoch
 - best validation `AUC-ROC`

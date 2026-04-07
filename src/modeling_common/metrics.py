@@ -34,6 +34,8 @@ def binary_classification_metrics(
         "positive_rate": float(y_true.mean()) if len(y_true) else 0.0,
         "predicted_positive_rate": float(predictions.mean()) if len(predictions) else 0.0,
         "auc_roc": float(roc_auc_score(y_true, y_prob)),
+        "pr_auc": float(pr_auc_score(y_true, y_prob)),
+        "brier_score": float(brier_score_loss(y_true, y_prob)),
         "accuracy": float(accuracy),
         "precision": float(precision),
         "recall": float(recall),
@@ -70,3 +72,31 @@ def roc_auc_score(labels: np.ndarray, probabilities: np.ndarray) -> float:
     positive_rank_sum = ranks[sorted_labels == 1].sum()
     auc = (positive_rank_sum - positives * (positives + 1) / 2.0) / (positives * negatives)
     return float(auc)
+
+
+def pr_auc_score(labels: np.ndarray, probabilities: np.ndarray) -> float:
+    y_true = np.asarray(labels, dtype=np.int64)
+    y_prob = np.asarray(probabilities, dtype=np.float64)
+    positives = int(y_true.sum())
+    if positives == 0:
+        return 0.0
+
+    order = np.argsort(-y_prob, kind="mergesort")
+    sorted_labels = y_true[order]
+    true_positives = np.cumsum(sorted_labels == 1)
+    false_positives = np.cumsum(sorted_labels == 0)
+    precision = true_positives / np.maximum(true_positives + false_positives, 1)
+    recall = true_positives / positives
+    precision = np.concatenate(([1.0], precision))
+    recall = np.concatenate(([0.0], recall))
+    return float(np.sum((recall[1:] - recall[:-1]) * precision[1:]))
+
+
+def brier_score_loss(labels: np.ndarray, probabilities: np.ndarray) -> float:
+    y_true = np.asarray(labels, dtype=np.float64)
+    y_prob = np.asarray(probabilities, dtype=np.float64)
+    if y_true.shape != y_prob.shape:
+        raise ValueError("labels and probabilities must have the same shape.")
+    if y_true.size == 0:
+        return 0.0
+    return float(np.mean((y_prob - y_true) ** 2))

@@ -22,4 +22,5 @@ export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 python -m lstm.train \
   --config configs/pipeline.toml \
   --window-size 50 \
-  --device cuda
+  --device cuda \
+  --debug-metrics

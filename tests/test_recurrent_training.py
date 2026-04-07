@@ -102,6 +102,7 @@ def test_lstm_trainer_writes_expected_artifacts(tmp_path: Path, monkeypatch: pyt
             "2",
             "--device",
             "cpu",
+            "--debug-metrics",
         ],
     )
 
@@ -116,8 +117,12 @@ def test_lstm_trainer_writes_expected_artifacts(tmp_path: Path, monkeypatch: pyt
     assert summary["model_name"] == "lstm"
     assert summary["window_size"] == 2
     assert summary["feature_order"] == list(FEATURE_ORDER)
+    assert summary["feature_standardization"]["enabled"] is True
+    assert summary["model_config"]["debug_metrics"] is True
     assert metrics["validation"]["row_count"] == 2
     assert metrics["test"]["row_count"] == 2
+    assert metrics["validation"]["pr_auc"] >= 0.0
+    assert (run_dir / "diagnostics.json").exists()
 
 
 def _assert_common_artifacts(run_dir: Path) -> None:

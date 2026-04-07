@@ -15,6 +15,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 from torch import nn
+from modeling_common.diagnostics import build_debug_diagnostics
+from modeling_common.metrics import binary_classification_metrics
+from modeling_common.sequence_scaling import (
+    SequenceStandardizationStats,
+    SequenceStandardizer,
+    apply_sequence_standardization,
+)
 
 try:
     import tomllib as toml_parser  # type: ignore[attr-defined]
@@ -60,6 +67,7 @@ class EvalResult:
     ids: List[str]
     labels: np.ndarray
     probabilities: np.ndarray
+    logits: np.ndarray
     metrics: Dict[str, object]
 
 
@@ -73,6 +81,7 @@ class TrainResult:
     test_eval: EvalResult
     class_weight_pos: float
     class_weight_neg: float
+    feature_standardization: SequenceStandardizationStats
 
 
 class LSTMClassifier(nn.Module):
@@ -115,6 +124,12 @@ def main() -> None:
     parser.add_argument("--eval-batch-size", type=int, default=2048, help="Evaluation batch size.")
     parser.add_argument("--learning-rate", type=float, default=1e-3, help="Adam learning rate.")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Adam weight decay.")
+    parser.add_argument(
+        "--positive-class-weight",
+        type=float,
+        default=None,
+        help="Optional positive-class weight override. Defaults to the train-split imbalance ratio.",
+    )
     parser.add_argument("--patience", type=int, default=3, help="Early stopping patience on validation AUC.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument(
@@ -122,6 +137,11 @@ def main() -> None:
         type=str,
         default=None,
         help="Torch device override. Defaults to cuda when available, else cpu.",
+    )
+    parser.add_argument(
+        "--debug-metrics",
+        action="store_true",
+        help="Write diagnostics.json with score summaries and validation threshold sweeps.",
     )
     args = parser.parse_args()
 
@@ -141,6 +161,7 @@ def main() -> None:
         eval_batch_size=args.eval_batch_size,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
+        positive_class_weight=args.positive_class_weight,
         patience=args.patience,
         seed=args.seed,
         device=device,
@@ -328,6 +349,17 @@ def count_train_class_weights(dataset_dir: Path, batch_size: int) -> Tuple[int, 
     return train_stats.positive_rows, train_stats.negative_rows, class_weight_pos, class_weight_neg
 
 
+def fit_train_standardizer(
+    dataset_dir: Path,
+    feature_order: Sequence[str],
+    batch_size: int,
+) -> SequenceStandardizationStats:
+    standardizer = SequenceStandardizer(feature_order)
+    for _, features, _ in iter_split_batches(dataset_dir, "train", batch_size):
+        standardizer.update(features)
+    return standardizer.finalize()
+
+
 def train_lstm(
     *,
     config: PipelineWindowConfig,
@@ -340,11 +372,16 @@ def train_lstm(
     eval_batch_size: int,
     learning_rate: float,
     weight_decay: float,
+    positive_class_weight: Optional[float],
     patience: int,
     seed: int,
     device: torch.device,
 ) -> TrainResult:
-    _, _, class_weight_pos, class_weight_neg = count_train_class_weights(config.dataset_dir, batch_size)
+    _, _, inferred_class_weight_pos, class_weight_neg = count_train_class_weights(config.dataset_dir, batch_size)
+    class_weight_pos = (
+        inferred_class_weight_pos if positive_class_weight is None else float(positive_class_weight)
+    )
+    feature_standardization = fit_train_standardizer(config.dataset_dir, config.feature_order, eval_batch_size)
     model = LSTMClassifier(
         input_size=len(config.feature_order),
         hidden_size=hidden_size,
@@ -376,7 +413,11 @@ def train_lstm(
             shuffle_rows=True,
             seed=seed + epoch,
         ):
-            features_tensor = torch.as_tensor(features, dtype=torch.float32, device=device)
+            features_tensor = torch.as_tensor(
+                apply_sequence_standardization(features, feature_standardization),
+                dtype=torch.float32,
+                device=device,
+            )
             labels_tensor = torch.as_tensor(labels, dtype=torch.float32, device=device)
             optimizer.zero_grad()
             logits = model(features_tensor)
@@ -386,7 +427,14 @@ def train_lstm(
             train_loss_total += float(loss.detach().cpu().item()) * int(labels_tensor.shape[0])
             train_rows += int(labels_tensor.shape[0])
 
-        validation_eval = evaluate_split(model, config.dataset_dir, "validation", eval_batch_size, device)
+        validation_eval = evaluate_split(
+            model,
+            config.dataset_dir,
+            "validation",
+            eval_batch_size,
+            device,
+            feature_standardization=feature_standardization,
+        )
         average_train_loss = train_loss_total / train_rows if train_rows else 0.0
         history.append(
             {
@@ -415,6 +463,7 @@ def train_lstm(
                 "window_size": config.window_size,
                 "best_epoch": epoch,
                 "best_validation_auc_roc": current_validation_auc,
+                "feature_standardization": feature_standardization.to_dict(),
             }
             epochs_without_improvement = 0
         else:
@@ -429,9 +478,30 @@ def train_lstm(
     torch.save(best_state, checkpoint_path)
     model.load_state_dict(best_state["model_state_dict"])
 
-    train_eval = evaluate_split(model, config.dataset_dir, "train", eval_batch_size, device)
-    validation_eval = evaluate_split(model, config.dataset_dir, "validation", eval_batch_size, device)
-    test_eval = evaluate_split(model, config.dataset_dir, "test", eval_batch_size, device)
+    train_eval = evaluate_split(
+        model,
+        config.dataset_dir,
+        "train",
+        eval_batch_size,
+        device,
+        feature_standardization=feature_standardization,
+    )
+    validation_eval = evaluate_split(
+        model,
+        config.dataset_dir,
+        "validation",
+        eval_batch_size,
+        device,
+        feature_standardization=feature_standardization,
+    )
+    test_eval = evaluate_split(
+        model,
+        config.dataset_dir,
+        "test",
+        eval_batch_size,
+        device,
+        feature_standardization=feature_standardization,
+    )
     return TrainResult(
         best_epoch=best_epoch,
         best_validation_auc_roc=best_validation_auc,
@@ -441,6 +511,7 @@ def train_lstm(
         test_eval=test_eval,
         class_weight_pos=class_weight_pos,
         class_weight_neg=class_weight_neg,
+        feature_standardization=feature_standardization,
     )
 
 
@@ -450,17 +521,24 @@ def evaluate_split(
     split: str,
     batch_size: int,
     device: torch.device,
+    *,
+    feature_standardization: SequenceStandardizationStats,
 ) -> EvalResult:
     model.eval()
     all_ids: List[str] = []
     all_labels: List[np.ndarray] = []
     all_probabilities: List[np.ndarray] = []
+    all_logits: List[np.ndarray] = []
     total_loss = 0.0
     total_rows = 0
     criterion = nn.BCEWithLogitsLoss(reduction="sum")
     with torch.no_grad():
         for ids, features, labels in iter_split_batches(dataset_dir, split, batch_size):
-            features_tensor = torch.as_tensor(features, dtype=torch.float32, device=device)
+            features_tensor = torch.as_tensor(
+                apply_sequence_standardization(features, feature_standardization),
+                dtype=torch.float32,
+                device=device,
+            )
             labels_tensor = torch.as_tensor(labels, dtype=torch.float32, device=device)
             logits = model(features_tensor)
             loss = criterion(logits, labels_tensor)
@@ -468,6 +546,7 @@ def evaluate_split(
             all_ids.extend(ids)
             all_labels.append(labels)
             all_probabilities.append(probabilities)
+            all_logits.append(logits.detach().cpu().numpy())
             total_loss += float(loss.detach().cpu().item())
             total_rows += int(labels.shape[0])
 
@@ -475,65 +554,16 @@ def evaluate_split(
     probabilities_array = (
         np.concatenate(all_probabilities, axis=0) if all_probabilities else np.zeros(0, dtype=np.float64)
     )
-    metrics = classification_metrics(labels_array, probabilities_array)
+    logits_array = np.concatenate(all_logits, axis=0) if all_logits else np.zeros(0, dtype=np.float64)
+    metrics = binary_classification_metrics(labels_array, probabilities_array)
     metrics["loss"] = float(total_loss / total_rows) if total_rows else 0.0
-    return EvalResult(ids=all_ids, labels=labels_array, probabilities=probabilities_array, metrics=metrics)
-
-
-def classification_metrics(labels: np.ndarray, probabilities: np.ndarray) -> Dict[str, object]:
-    y_true = np.asarray(labels, dtype=np.int64)
-    y_prob = np.asarray(probabilities, dtype=np.float64)
-    if y_true.ndim != 1 or y_prob.ndim != 1 or y_true.shape[0] != y_prob.shape[0]:
-        raise ValueError("labels and probabilities must be one-dimensional arrays of equal length.")
-    predictions = (y_prob >= 0.5).astype(np.int64)
-    true_positive = int(((predictions == 1) & (y_true == 1)).sum())
-    true_negative = int(((predictions == 0) & (y_true == 0)).sum())
-    false_positive = int(((predictions == 1) & (y_true == 0)).sum())
-    false_negative = int(((predictions == 0) & (y_true == 1)).sum())
-    precision = true_positive / float(true_positive + false_positive) if (true_positive + false_positive) else 0.0
-    recall = true_positive / float(true_positive + false_negative) if (true_positive + false_negative) else 0.0
-    accuracy = float(true_positive + true_negative) / float(len(y_true)) if len(y_true) else 0.0
-    f1 = 2.0 * precision * recall / float(precision + recall) if (precision + recall) else 0.0
-    return {
-        "row_count": int(len(y_true)),
-        "positive_rows": int(y_true.sum()),
-        "negative_rows": int(len(y_true) - int(y_true.sum())),
-        "positive_rate": float(y_true.mean()) if len(y_true) else 0.0,
-        "predicted_positive_rate": float(predictions.mean()) if len(predictions) else 0.0,
-        "auc_roc": float(roc_auc_score(y_true, y_prob)),
-        "accuracy": accuracy,
-        "precision": float(precision),
-        "recall": float(recall),
-        "f1": float(f1),
-        "true_positive": true_positive,
-        "true_negative": true_negative,
-        "false_positive": false_positive,
-        "false_negative": false_negative,
-    }
-
-
-def roc_auc_score(labels: np.ndarray, probabilities: np.ndarray) -> float:
-    y_true = np.asarray(labels, dtype=np.int64)
-    y_prob = np.asarray(probabilities, dtype=np.float64)
-    positives = int(y_true.sum())
-    negatives = int(len(y_true) - positives)
-    if positives == 0 or negatives == 0:
-        return 0.5
-    order = np.argsort(y_prob, kind="mergesort")
-    sorted_scores = y_prob[order]
-    sorted_labels = y_true[order]
-    ranks = np.empty(len(sorted_scores), dtype=np.float64)
-    index = 0
-    while index < len(sorted_scores):
-        next_index = index + 1
-        while next_index < len(sorted_scores) and sorted_scores[next_index] == sorted_scores[index]:
-            next_index += 1
-        average_rank = (index + next_index - 1) / 2.0 + 1.0
-        ranks[index:next_index] = average_rank
-        index = next_index
-    positive_rank_sum = float(ranks[sorted_labels == 1].sum())
-    auc = (positive_rank_sum - positives * (positives + 1) / 2.0) / float(positives * negatives)
-    return float(auc)
+    return EvalResult(
+        ids=all_ids,
+        labels=labels_array,
+        probabilities=probabilities_array,
+        logits=logits_array,
+        metrics=metrics,
+    )
 
 
 def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argparse.Namespace, result: TrainResult) -> None:
@@ -554,15 +584,18 @@ def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argpa
             "eval_batch_size": args.eval_batch_size,
             "learning_rate": args.learning_rate,
             "weight_decay": args.weight_decay,
+            "positive_class_weight": args.positive_class_weight,
             "patience": args.patience,
             "seed": args.seed,
             "device": str(args.device if args.device is not None else ("cuda" if torch.cuda.is_available() else "cpu")),
+            "debug_metrics": bool(args.debug_metrics),
         },
         "split_summaries": split_summaries,
         "class_weights": {
             "positive": result.class_weight_pos,
             "negative": result.class_weight_neg,
         },
+        "feature_standardization": result.feature_standardization.to_dict(),
         "best_epoch": result.best_epoch,
         "best_validation_auc_roc": result.best_validation_auc_roc,
         "row_counts": {
@@ -580,6 +613,38 @@ def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argpa
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str) + "\n")
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str) + "\n")
+    if args.debug_metrics:
+        reference_thresholds = {
+            "default_0_5": 0.5,
+            "class_weight_adjusted": result.class_weight_neg / (result.class_weight_neg + result.class_weight_pos),
+        }
+        (run_dir / "diagnostics.json").write_text(
+            json.dumps(
+                build_debug_diagnostics(
+                    split_payloads={
+                        "train": {
+                            "labels": result.train_eval.labels,
+                            "probabilities": result.train_eval.probabilities,
+                            "logits": result.train_eval.logits,
+                        },
+                        "validation": {
+                            "labels": result.validation_eval.labels,
+                            "probabilities": result.validation_eval.probabilities,
+                            "logits": result.validation_eval.logits,
+                        },
+                        "test": {
+                            "labels": result.test_eval.labels,
+                            "probabilities": result.test_eval.probabilities,
+                            "logits": result.test_eval.logits,
+                        },
+                    },
+                    reference_thresholds=reference_thresholds,
+                ),
+                indent=2,
+                default=str,
+            )
+            + "\n"
+        )
     write_history_csv(run_dir / "history.csv", result.history)
     write_predictions_parquet(
         run_dir / "predictions_validation.parquet",

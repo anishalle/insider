@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH -p a30
-#SBATCH -c 32
-#SBATCH --mem=192G
+#SBATCH -p h100
+#SBATCH -c 31
+#SBATCH --mem=242G
 #SBATCH --gpus=1
 #SBATCH -J insider-lstm
 #SBATCH -o logs/slurm-%j.out

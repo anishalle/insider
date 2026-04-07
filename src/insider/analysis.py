@@ -6,6 +6,7 @@ import csv
 import json
 import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from insider.config import PipelineConfig
@@ -612,7 +613,7 @@ def _fetch_context_rows(
 
 
 def _render_candidate_plot(candidate: SignalCandidate, context_rows: list[ContextRow], output_path: Path) -> None:
-    cache_dir = output_path.parent.parent / ".cache"
+    cache_dir = Path(tempfile.gettempdir()) / "insider-matplotlib-cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(cache_dir / "matplotlib"))
     os.environ.setdefault("XDG_CACHE_HOME", str(cache_dir))

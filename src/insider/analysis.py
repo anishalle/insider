@@ -59,7 +59,7 @@ def visualize_signals(
     if lookback_minutes < 1 or lookahead_minutes < 1:
         raise ValueError("lookback_minutes and lookahead_minutes must be positive.")
 
-    resolved_output_dir = output_dir or (config.output.root / "analysis" / "signal_review")
+    resolved_output_dir = output_dir or Path("/home/axa230262/work/001 research/insider/analysis/signal-review")
     resolved_output_dir.mkdir(parents=True, exist_ok=True)
     plots_dir = resolved_output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)

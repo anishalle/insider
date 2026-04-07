@@ -15,7 +15,7 @@ bash scripts/bootstrap-juno-env.sh
 . .venv/bin/activate
 python -m insider visualize-signals \
   --config configs/pipeline.toml \
-  --output-dir /home/axa230262/scratch/insider/analysis/signal-review \
+  --output-dir "/home/axa230262/work/001 research/insider/analysis/signal-review" \
   --examples-per-class 4 \
   --ambiguous-examples 2 \
   --lookback-minutes 60 \

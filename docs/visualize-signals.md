@@ -38,7 +38,7 @@ Local example:
 ```bash
 uv run insider visualize-signals \
   --config configs/pipeline.toml \
-  --output-dir /home/axa230262/scratch/insider/analysis/signal-review
+  --output-dir "/home/axa230262/work/001 research/insider/analysis/signal-review"
 ```
 
 Direct Juno example:
@@ -49,7 +49,7 @@ bash scripts/bootstrap-juno-env.sh
 . .venv/bin/activate
 python -m insider visualize-signals \
   --config configs/pipeline.toml \
-  --output-dir /home/axa230262/scratch/insider/analysis/signal-review \
+  --output-dir "/home/axa230262/work/001 research/insider/analysis/signal-review" \
   --examples-per-class 4 \
   --ambiguous-examples 2 \
   --lookback-minutes 60 \
@@ -151,6 +151,6 @@ Current behavior of the batch script:
 2. creates `logs/`
 3. bootstraps the repo-local `.venv`
 4. runs `python -m insider visualize-signals`
-5. writes review artifacts under `/home/axa230262/scratch/insider/analysis/signal-review`
+5. writes review artifacts under `/home/axa230262/work/001 research/insider/analysis/signal-review`
 
 The dev script intentionally does not set mail flags.

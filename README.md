@@ -22,7 +22,7 @@ uv run insider prepare-trades --config configs/pipeline.toml --overwrite
 uv run insider label-user-trades --config configs/pipeline.toml --overwrite
 uv run insider build-sequences --config configs/pipeline.toml --overwrite
 uv run insider build-model-windows --config configs/pipeline.toml --window-size 50 --overwrite
-uv run insider visualize-signals --config configs/pipeline.toml --output-dir /home/axa230262/scratch/insider/analysis/signal-review
+uv run insider visualize-signals --config configs/pipeline.toml --output-dir "/home/axa230262/work/001 research/insider/analysis/signal-review"
 uv run insider run-pipeline --config configs/pipeline.toml --overwrite
 uv run insider smoke-test --config configs/pipeline.toml --overwrite
 ```

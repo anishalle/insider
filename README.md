@@ -10,6 +10,7 @@ The pipeline is staged to keep RAM bounded on Juno:
 1. `prepare-trades`
 2. `label-user-trades`
 3. `build-sequences`
+4. `build-model-windows`
 
 Local repo is the source of truth. Juno should only pull pushed commits, run the Slurm jobs, and write generated parquet outputs under scratch.
 
@@ -20,6 +21,7 @@ uv sync --extra dev
 uv run insider prepare-trades --config configs/pipeline.toml --overwrite
 uv run insider label-user-trades --config configs/pipeline.toml --overwrite
 uv run insider build-sequences --config configs/pipeline.toml --overwrite
+uv run insider build-model-windows --config configs/pipeline.toml --window-size 50 --overwrite
 uv run insider run-pipeline --config configs/pipeline.toml --overwrite
 uv run insider smoke-test --config configs/pipeline.toml --overwrite
 ```
@@ -31,8 +33,9 @@ ssh juno.utdallas.edu
 bash scripts/link-juno-repo.sh
 bash scripts/juno-sync.sh
 mkdir -p logs
-sbatch jobs/run-dev.sbatch
-sbatch jobs/run-normal.sbatch
+sbatch jobs/preprocess/run-dev.sbatch
+sbatch jobs/preprocess/run-normal.sbatch
+sbatch jobs/windowing/run-window-50.sbatch
 ```
 
 Juno currently has a broken `uv` binary in the shell path, so the remote scripts bootstrap a repo-local `.venv` with `python3 -m venv` instead of relying on `uv` there.

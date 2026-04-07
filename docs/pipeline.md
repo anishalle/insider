@@ -19,4 +19,9 @@ The preprocessing job is split into three disk-backed stages so the full dataset
    - Assigns time-based train/validation/test splits
    - Writes partitioned sequence shards by split
 
+4. `build-model-windows`
+   - Rebuilds exact-width model windows from `labeled_user_trades`
+   - Uses the configured feature order and time-based split ratios
+   - Writes reusable training windows under `model_windows/window_size=<N>`
+
 Stage manifests are written under `processed/manifests/` and include row counts plus time coverage for resumable monitoring.

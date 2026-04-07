@@ -329,6 +329,115 @@ def build_sequences(config: PipelineConfig, *, overwrite: bool = False) -> Path:
         connection.close()
 
 
+def build_model_windows(
+    config: PipelineConfig,
+    *,
+    window_size: int | None = None,
+    stride: int | None = None,
+    overwrite: bool = False,
+) -> Path:
+    labeled_glob = _dataset_glob(config.output.root / config.output.labeled_dirname)
+    resolved_window_size = config.model_windows.length if window_size is None else int(window_size)
+    resolved_stride = config.model_windows.stride if stride is None else int(stride)
+    if resolved_window_size < 1 or resolved_stride < 1:
+        raise ValueError("Model window length and stride must be positive integers.")
+
+    stage_dirname = f"{config.output.model_window_dirname}/window_size={resolved_window_size}"
+    window_dir = _stage_dir(config, stage_dirname, overwrite=overwrite)
+    connection = connect(config.runtime, config.output.root)
+    try:
+        train_cutoff, validation_cutoff = _compute_model_window_split_cutoffs(
+            connection,
+            labeled_glob,
+            config,
+            window_size=resolved_window_size,
+            stride=resolved_stride,
+        )
+        feature_vector_sql = _feature_vector_sql(config.model_windows.feature_order)
+        frame_size = resolved_window_size - 1
+        query = f"""
+        COPY (
+            WITH enriched AS (
+                SELECT
+                    *,
+                    COALESCE(
+                        epoch(trade_time) - epoch(lag(trade_time) OVER user_market_window),
+                        0.0
+                    ) AS time_delta_seconds,
+                    epoch(trade_time) - epoch(first_value(trade_time) OVER user_market_window) AS market_age_seconds,
+                    CASE WHEN role = 'maker' THEN 1.0 ELSE 0.0 END AS role_is_maker,
+                    row_number() OVER user_market_window AS window_row_number
+                FROM read_parquet('{_sql_escape(labeled_glob)}')
+                WINDOW user_market_window AS (
+                    PARTITION BY user, market_id
+                    ORDER BY trade_time
+                )
+            ),
+            windowed AS (
+                SELECT
+                    user,
+                    market_id,
+                    min(trade_time) OVER frame_window AS window_start_ts,
+                    trade_time AS window_end_ts,
+                    window_row_number,
+                    list({feature_vector_sql}) OVER frame_window AS features,
+                    label
+                FROM enriched
+                WINDOW frame_window AS (
+                    PARTITION BY user, market_id
+                    ORDER BY trade_time
+                    ROWS BETWEEN {frame_size} PRECEDING AND CURRENT ROW
+                )
+            )
+            SELECT
+                concat_ws(
+                    ':',
+                    user,
+                    market_id,
+                    strftime(window_end_ts, '%Y%m%d%H%M%S'),
+                    lpad(CAST(window_row_number AS VARCHAR), 8, '0')
+                ) AS window_id,
+                user,
+                market_id,
+                window_start_ts,
+                window_end_ts,
+                {resolved_window_size} AS window_size,
+                features,
+                label,
+                CASE
+                    WHEN epoch(window_end_ts) <= {train_cutoff} THEN 'train'
+                    WHEN epoch(window_end_ts) <= {validation_cutoff} THEN 'validation'
+                    ELSE 'test'
+                END AS split
+            FROM windowed
+            WHERE window_row_number >= {resolved_window_size}
+              AND ((window_row_number - {resolved_window_size}) % {resolved_stride}) = 0
+              AND length(features) = {resolved_window_size}
+        )
+        TO '{_sql_escape(window_dir)}'
+        (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (split))
+        """
+        connection.execute(query)
+        _write_stage_manifest(
+            config,
+            stage_name=f"build_model_windows_{resolved_window_size}",
+            dataset_dir=window_dir,
+            time_column="window_end_ts",
+            extras={
+                "model_window": {
+                    "length": resolved_window_size,
+                    "stride": resolved_stride,
+                    "feature_order": list(config.model_windows.feature_order),
+                },
+                "train_cutoff_epoch": train_cutoff,
+                "validation_cutoff_epoch": validation_cutoff,
+            },
+        )
+        return window_dir
+    finally:
+        connection.close()
+
+
 def run_pipeline(
     config: PipelineConfig,
     *,
@@ -372,6 +481,41 @@ def _compute_split_cutoffs(connection: Any, labeled_glob: str, config: PipelineC
     ).fetchone()
     if row is None or row[0] is None or row[1] is None:
         raise ValueError("Unable to compute split cutoffs from labeled dataset.")
+    return float(row[0]), float(row[1])
+
+
+def _compute_model_window_split_cutoffs(
+    connection: Any,
+    labeled_glob: str,
+    config: PipelineConfig,
+    *,
+    window_size: int,
+    stride: int,
+) -> tuple[float, float]:
+    row = connection.execute(
+        f"""
+        WITH window_candidates AS (
+            SELECT
+                trade_time AS window_end_ts,
+                row_number() OVER (
+                    PARTITION BY user, market_id
+                    ORDER BY trade_time
+                ) AS window_row_number
+            FROM read_parquet('{_sql_escape(labeled_glob)}')
+        )
+        SELECT
+            quantile_cont(epoch(window_end_ts), {config.model_windows.train_ratio}) AS train_cutoff,
+            quantile_cont(
+                epoch(window_end_ts),
+                {config.model_windows.train_ratio + config.model_windows.validation_ratio}
+            ) AS validation_cutoff
+        FROM window_candidates
+        WHERE window_row_number >= {window_size}
+          AND ((window_row_number - {window_size}) % {stride}) = 0
+        """
+    ).fetchone()
+    if row is None or row[0] is None or row[1] is None:
+        raise ValueError("Unable to compute split cutoffs from model windows.")
     return float(row[0]), float(row[1])
 
 
@@ -435,6 +579,7 @@ def _write_stage_manifest(
         "runtime": asdict(config.runtime),
         "label": asdict(config.label),
         "sequence": asdict(config.sequence),
+        "model_windows": asdict(config.model_windows),
         **extras,
     }
     manifest_path = config.output.root / config.output.manifest_dirname / f"{stage_name}.json"

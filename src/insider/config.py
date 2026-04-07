@@ -28,6 +28,7 @@ class OutputConfig:
     prepared_dirname: str = "prepared_trades"
     labeled_dirname: str = "labeled_user_trades"
     sequence_dirname: str = "sequence_dataset"
+    model_window_dirname: str = "model_windows"
     manifest_dirname: str = "manifests"
 
 
@@ -58,6 +59,16 @@ class SequenceConfig:
 
 
 @dataclass(frozen=True)
+class ModelWindowConfig:
+    length: int = 50
+    stride: int = 16
+    feature_order: tuple[str, ...] = DEFAULT_FEATURE_ORDER
+    train_ratio: float = 0.8
+    validation_ratio: float = 0.1
+    test_ratio: float = 0.1
+
+
+@dataclass(frozen=True)
 class SmokeConfig:
     start: datetime | None = None
     end: datetime | None = None
@@ -70,6 +81,7 @@ class PipelineConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     label: LabelConfig = field(default_factory=LabelConfig)
     sequence: SequenceConfig = field(default_factory=SequenceConfig)
+    model_windows: ModelWindowConfig = field(default_factory=ModelWindowConfig)
     smoke: SmokeConfig = field(default_factory=SmokeConfig)
 
     def with_output_root(self, output_root: Path) -> "PipelineConfig":
@@ -84,6 +96,7 @@ def load_config(path: Path) -> PipelineConfig:
     runtime_raw = raw.get("runtime", {})
     label_raw = raw.get("label", {})
     sequence_raw = raw.get("sequence", {})
+    model_windows_raw = raw.get("model_windows", {})
     smoke_raw = raw.get("smoke", {})
 
     sequence = SequenceConfig(
@@ -101,6 +114,24 @@ def load_config(path: Path) -> PipelineConfig:
     if sequence.length < 1 or sequence.stride < 1:
         raise ValueError("Sequence length and stride must be positive integers.")
 
+    model_windows = ModelWindowConfig(
+        length=int(model_windows_raw.get("length", 50)),
+        stride=int(model_windows_raw.get("stride", 16)),
+        feature_order=tuple(model_windows_raw.get("feature_order", DEFAULT_FEATURE_ORDER)),
+        train_ratio=float(model_windows_raw.get("train_ratio", 0.8)),
+        validation_ratio=float(model_windows_raw.get("validation_ratio", 0.1)),
+        test_ratio=float(model_windows_raw.get("test_ratio", 0.1)),
+    )
+
+    model_ratio_total = round(
+        model_windows.train_ratio + model_windows.validation_ratio + model_windows.test_ratio,
+        10,
+    )
+    if model_ratio_total != 1.0:
+        raise ValueError("Model window split ratios must sum to 1.0.")
+    if model_windows.length < 1 or model_windows.stride < 1:
+        raise ValueError("Model window length and stride must be positive integers.")
+
     return PipelineConfig(
         inputs=InputConfig(
             trades_path=Path(inputs_raw["trades_path"]),
@@ -111,6 +142,7 @@ def load_config(path: Path) -> PipelineConfig:
             prepared_dirname=output_raw.get("prepared_dirname", "prepared_trades"),
             labeled_dirname=output_raw.get("labeled_dirname", "labeled_user_trades"),
             sequence_dirname=output_raw.get("sequence_dirname", "sequence_dataset"),
+            model_window_dirname=output_raw.get("model_window_dirname", "model_windows"),
             manifest_dirname=output_raw.get("manifest_dirname", "manifests"),
         ),
         runtime=RuntimeConfig(
@@ -126,6 +158,7 @@ def load_config(path: Path) -> PipelineConfig:
             token_decimals=int(label_raw.get("token_decimals", 6)),
         ),
         sequence=sequence,
+        model_windows=model_windows,
         smoke=SmokeConfig(
             start=_parse_optional_datetime(smoke_raw.get("start")),
             end=_parse_optional_datetime(smoke_raw.get("end")),

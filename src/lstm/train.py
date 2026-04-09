@@ -26,6 +26,15 @@ from modeling_common.sequence_scaling import (
     build_default_transform_kinds,
     transform_sequence_features,
 )
+from modeling_common.tabular_scaling import (
+    TabularStandardizationStats,
+    TabularStandardizer,
+    apply_tabular_standardization,
+)
+from modeling_common.window_features import (
+    build_window_summary_feature_names,
+    compute_window_summary_features,
+)
 
 try:
     import tomllib as toml_parser  # type: ignore[attr-defined]
@@ -88,6 +97,7 @@ class TrainResult:
     class_weight_pos: float
     class_weight_neg: float
     feature_standardization: SequenceStandardizationStats
+    summary_feature_standardization: TabularStandardizationStats
 
 
 class LSTMClassifier(nn.Module):
@@ -97,6 +107,8 @@ class LSTMClassifier(nn.Module):
         hidden_size: int,
         num_layers: int,
         dropout: float,
+        pooling: str,
+        summary_feature_size: int,
     ) -> None:
         super(LSTMClassifier, self).__init__()
         lstm_dropout = dropout if num_layers > 1 else 0.0
@@ -107,13 +119,29 @@ class LSTMClassifier(nn.Module):
             dropout=lstm_dropout,
             batch_first=True,
         )
+        if pooling not in {"last", "mean", "max", "mean_last"}:
+            raise ValueError("Unsupported pooling mode: %s" % pooling)
+        self.pooling = pooling
+        pooled_size = hidden_size * 2 if pooling == "mean_last" else hidden_size
+        self.summary_feature_size = int(summary_feature_size)
         self.dropout = nn.Dropout(dropout)
-        self.head = nn.Linear(hidden_size, 1)
+        self.head = nn.Linear(pooled_size + self.summary_feature_size, 1)
 
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+    def forward(self, inputs: torch.Tensor, summary_features: Optional[torch.Tensor] = None) -> torch.Tensor:
         outputs, _ = self.lstm(inputs)
-        last_step = outputs[:, -1, :]
-        logits = self.head(self.dropout(last_step))
+        if self.pooling == "last":
+            pooled = outputs[:, -1, :]
+        elif self.pooling == "mean":
+            pooled = outputs.mean(dim=1)
+        elif self.pooling == "max":
+            pooled = outputs.max(dim=1).values
+        else:
+            pooled = torch.cat((outputs[:, -1, :], outputs.mean(dim=1)), dim=1)
+        if self.summary_feature_size > 0:
+            if summary_features is None:
+                raise ValueError("summary_features are required when summary_feature_size > 0.")
+            pooled = torch.cat((pooled, summary_features), dim=1)
+        logits = self.head(self.dropout(pooled))
         return logits.squeeze(-1)
 
 
@@ -125,11 +153,42 @@ def main() -> None:
     parser.add_argument("--hidden-size", type=int, default=128, help="Hidden size for the LSTM.")
     parser.add_argument("--num-layers", type=int, default=1, help="Number of LSTM layers.")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout used in the model.")
+    parser.add_argument(
+        "--pooling",
+        type=str,
+        default="mean_last",
+        choices=("last", "mean", "max", "mean_last"),
+        help="How to pool the LSTM outputs before the classifier head.",
+    )
     parser.add_argument("--epochs", type=int, default=12, help="Maximum training epochs.")
     parser.add_argument("--batch-size", type=int, default=1024, help="Training batch size.")
     parser.add_argument("--eval-batch-size", type=int, default=2048, help="Evaluation batch size.")
-    parser.add_argument("--learning-rate", type=float, default=1e-3, help="Adam learning rate.")
-    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Adam weight decay.")
+    parser.add_argument("--learning-rate", type=float, default=1e-3, help="AdamW learning rate.")
+    parser.add_argument("--weight-decay", type=float, default=1e-4, help="AdamW weight decay.")
+    parser.add_argument(
+        "--gradient-clip-norm",
+        type=float,
+        default=1.0,
+        help="Clip gradient norms to this value. Disable with 0.",
+    )
+    parser.add_argument(
+        "--scheduler-factor",
+        type=float,
+        default=0.5,
+        help="ReduceLROnPlateau factor applied after validation AUC stalls.",
+    )
+    parser.add_argument(
+        "--scheduler-patience",
+        type=int,
+        default=1,
+        help="ReduceLROnPlateau patience in epochs.",
+    )
+    parser.add_argument(
+        "--scheduler-min-lr",
+        type=float,
+        default=1e-5,
+        help="Minimum learning rate for ReduceLROnPlateau.",
+    )
     parser.add_argument(
         "--positive-class-weight",
         type=float,
@@ -167,10 +226,15 @@ def main() -> None:
         eval_batch_size=args.eval_batch_size,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
+        gradient_clip_norm=args.gradient_clip_norm,
+        scheduler_factor=args.scheduler_factor,
+        scheduler_patience=args.scheduler_patience,
+        scheduler_min_lr=args.scheduler_min_lr,
         positive_class_weight=args.positive_class_weight,
         patience=args.patience,
         seed=args.seed,
         device=device,
+        pooling=args.pooling,
     )
 
     write_run_artifacts(config, run_dir, args, result)
@@ -387,6 +451,18 @@ def fit_train_standardizer(
     return standardizer.finalize()
 
 
+def fit_train_summary_standardizer(
+    dataset_dir: Path,
+    feature_order: Sequence[str],
+    batch_size: int,
+) -> TabularStandardizationStats:
+    summary_feature_names = build_window_summary_feature_names(feature_order)
+    standardizer = TabularStandardizer(summary_feature_names)
+    for _, features, _ in iter_split_batches(dataset_dir, "train", batch_size):
+        standardizer.update(compute_window_summary_features(features))
+    return standardizer.finalize()
+
+
 def estimate_train_clip_bounds(
     dataset_dir: Path,
     feature_order: Sequence[str],
@@ -456,28 +532,47 @@ def train_lstm(
     eval_batch_size: int,
     learning_rate: float,
     weight_decay: float,
+    gradient_clip_norm: float,
+    scheduler_factor: float,
+    scheduler_patience: int,
+    scheduler_min_lr: float,
     positive_class_weight: Optional[float],
     patience: int,
     seed: int,
     device: torch.device,
+    pooling: str,
 ) -> TrainResult:
     _, _, inferred_class_weight_pos, class_weight_neg = count_train_class_weights(config.dataset_dir, batch_size)
     class_weight_pos = (
         inferred_class_weight_pos if positive_class_weight is None else float(positive_class_weight)
     )
     feature_standardization = fit_train_standardizer(config.dataset_dir, config.feature_order, eval_batch_size)
+    summary_feature_standardization = fit_train_summary_standardizer(
+        config.dataset_dir,
+        config.feature_order,
+        eval_batch_size,
+    )
     model = LSTMClassifier(
         input_size=len(config.feature_order),
         hidden_size=hidden_size,
         num_layers=num_layers,
         dropout=dropout,
+        pooling=pooling,
+        summary_feature_size=len(summary_feature_standardization.feature_names),
     )
     model.to(device)
 
     criterion = nn.BCEWithLogitsLoss(
         pos_weight=torch.tensor([class_weight_pos], dtype=torch.float32, device=device)
     )
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="max",
+        factor=scheduler_factor,
+        patience=scheduler_patience,
+        min_lr=scheduler_min_lr,
+    )
 
     best_state = None
     best_validation_auc = float("-inf")
@@ -502,11 +597,21 @@ def train_lstm(
                 dtype=torch.float32,
                 device=device,
             )
+            summary_tensor = torch.as_tensor(
+                apply_tabular_standardization(
+                    compute_window_summary_features(features),
+                    summary_feature_standardization,
+                ),
+                dtype=torch.float32,
+                device=device,
+            )
             labels_tensor = torch.as_tensor(labels, dtype=torch.float32, device=device)
             optimizer.zero_grad()
-            logits = model(features_tensor)
+            logits = model(features_tensor, summary_tensor)
             loss = criterion(logits, labels_tensor)
             loss.backward()
+            if gradient_clip_norm > 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
             optimizer.step()
             train_loss_total += float(loss.detach().cpu().item()) * int(labels_tensor.shape[0])
             train_rows += int(labels_tensor.shape[0])
@@ -518,8 +623,10 @@ def train_lstm(
             eval_batch_size,
             device,
             feature_standardization=feature_standardization,
+            summary_feature_standardization=summary_feature_standardization,
         )
         average_train_loss = train_loss_total / train_rows if train_rows else 0.0
+        current_learning_rate = float(optimizer.param_groups[0]["lr"])
         history.append(
             {
                 "epoch": epoch,
@@ -528,10 +635,12 @@ def train_lstm(
                 "validation_loss": float(validation_eval.metrics["loss"]),
                 "validation_accuracy": float(validation_eval.metrics["accuracy"]),
                 "validation_positive_rate": float(validation_eval.metrics["positive_rate"]),
+                "learning_rate": current_learning_rate,
             }
         )
 
         current_validation_auc = float(validation_eval.metrics["auc_roc"])
+        scheduler.step(current_validation_auc)
         if current_validation_auc > best_validation_auc:
             best_validation_auc = current_validation_auc
             best_epoch = epoch
@@ -542,12 +651,16 @@ def train_lstm(
                     "hidden_size": hidden_size,
                     "num_layers": num_layers,
                     "dropout": dropout,
+                    "pooling": pooling,
+                    "summary_feature_size": len(summary_feature_standardization.feature_names),
                 },
                 "feature_order": list(config.feature_order),
+                "summary_feature_order": list(summary_feature_standardization.feature_names),
                 "window_size": config.window_size,
                 "best_epoch": epoch,
                 "best_validation_auc_roc": current_validation_auc,
                 "feature_standardization": feature_standardization.to_dict(),
+                "summary_feature_standardization": summary_feature_standardization.to_dict(),
             }
             epochs_without_improvement = 0
         else:
@@ -569,6 +682,7 @@ def train_lstm(
         eval_batch_size,
         device,
         feature_standardization=feature_standardization,
+        summary_feature_standardization=summary_feature_standardization,
     )
     validation_eval = evaluate_split(
         model,
@@ -577,6 +691,7 @@ def train_lstm(
         eval_batch_size,
         device,
         feature_standardization=feature_standardization,
+        summary_feature_standardization=summary_feature_standardization,
     )
     test_eval = evaluate_split(
         model,
@@ -585,6 +700,7 @@ def train_lstm(
         eval_batch_size,
         device,
         feature_standardization=feature_standardization,
+        summary_feature_standardization=summary_feature_standardization,
     )
     return TrainResult(
         best_epoch=best_epoch,
@@ -596,6 +712,7 @@ def train_lstm(
         class_weight_pos=class_weight_pos,
         class_weight_neg=class_weight_neg,
         feature_standardization=feature_standardization,
+        summary_feature_standardization=summary_feature_standardization,
     )
 
 
@@ -607,6 +724,7 @@ def evaluate_split(
     device: torch.device,
     *,
     feature_standardization: SequenceStandardizationStats,
+    summary_feature_standardization: TabularStandardizationStats,
 ) -> EvalResult:
     model.eval()
     all_ids: List[str] = []
@@ -623,8 +741,16 @@ def evaluate_split(
                 dtype=torch.float32,
                 device=device,
             )
+            summary_tensor = torch.as_tensor(
+                apply_tabular_standardization(
+                    compute_window_summary_features(features),
+                    summary_feature_standardization,
+                ),
+                dtype=torch.float32,
+                device=device,
+            )
             labels_tensor = torch.as_tensor(labels, dtype=torch.float32, device=device)
-            logits = model(features_tensor)
+            logits = model(features_tensor, summary_tensor)
             loss = criterion(logits, labels_tensor)
             probabilities = torch.sigmoid(logits).detach().cpu().numpy()
             all_ids.extend(ids)
@@ -670,11 +796,17 @@ def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argpa
             "hidden_size": args.hidden_size,
             "num_layers": args.num_layers,
             "dropout": args.dropout,
+            "pooling": args.pooling,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "eval_batch_size": args.eval_batch_size,
             "learning_rate": args.learning_rate,
             "weight_decay": args.weight_decay,
+            "optimizer": "AdamW",
+            "gradient_clip_norm": args.gradient_clip_norm,
+            "scheduler_factor": args.scheduler_factor,
+            "scheduler_patience": args.scheduler_patience,
+            "scheduler_min_lr": args.scheduler_min_lr,
             "positive_class_weight": args.positive_class_weight,
             "patience": args.patience,
             "seed": args.seed,
@@ -687,6 +819,7 @@ def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argpa
             "negative": result.class_weight_neg,
         },
         "feature_standardization": result.feature_standardization.to_dict(),
+        "summary_feature_standardization": result.summary_feature_standardization.to_dict(),
         "best_epoch": result.best_epoch,
         "best_validation_auc_roc": result.best_validation_auc_roc,
         "row_counts": {

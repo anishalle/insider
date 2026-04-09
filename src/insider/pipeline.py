@@ -120,6 +120,12 @@ def label_user_trades(config: PipelineConfig, *, overwrite: bool = False) -> Pat
     connection = connect(config.runtime, config.output.root)
     try:
         horizon = config.label.horizon_minutes
+        future_lag_filter = ""
+        if config.label.max_future_lag_seconds is not None:
+            future_lag_filter = f"AND future_lag_seconds <= {int(config.label.max_future_lag_seconds)}"
+        ambiguous_markout_filter = ""
+        if float(config.label.min_abs_markout_bps) > 0.0:
+            ambiguous_markout_filter = f"AND ABS(markout_bps) >= {float(config.label.min_abs_markout_bps)}"
         query = f"""
         COPY (
             WITH prepared AS (
@@ -141,7 +147,11 @@ def label_user_trades(config: PipelineConfig, *, overwrite: bool = False) -> Pat
                     t.*,
                     t.trade_time + INTERVAL {horizon} MINUTE AS target_time,
                     fp.future_trade_time,
-                    fp.future_price_yes
+                    fp.future_price_yes,
+                    CASE
+                        WHEN fp.future_trade_time IS NULL THEN NULL
+                        ELSE epoch(fp.future_trade_time) - epoch(t.trade_time + INTERVAL {horizon} MINUTE)
+                    END AS future_lag_seconds
                 FROM (
                     SELECT
                         *,
@@ -170,6 +180,7 @@ def label_user_trades(config: PipelineConfig, *, overwrite: bool = False) -> Pat
                     trade_time,
                     target_time,
                     future_trade_time,
+                    future_lag_seconds,
                     price_yes,
                     future_price_yes,
                     usd_amount,
@@ -197,6 +208,7 @@ def label_user_trades(config: PipelineConfig, *, overwrite: bool = False) -> Pat
                     trade_time,
                     target_time,
                     future_trade_time,
+                    future_lag_seconds,
                     price_yes,
                     future_price_yes,
                     usd_amount,
@@ -206,24 +218,30 @@ def label_user_trades(config: PipelineConfig, *, overwrite: bool = False) -> Pat
                     taker_direction AS direction,
                     {_side_sql('taker_direction')} AS side
                 FROM priced
+            ),
+            scored AS (
+                SELECT
+                    *,
+                    side * token_amount AS signed_token_amount,
+                    side * (future_price_yes - price_yes) AS markout,
+                    CASE
+                        WHEN price_yes IS NOT NULL AND price_yes <> 0 AND future_price_yes IS NOT NULL
+                        THEN side * ((future_price_yes / price_yes) - 1.0) * 10000.0
+                        ELSE NULL
+                    END AS markout_bps,
+                    CASE
+                        WHEN side * (future_price_yes - price_yes) > 0 THEN 1
+                        ELSE 0
+                    END AS label,
+                    strftime(trade_time, '%Y-%m') AS year_month
+                FROM user_rows
             )
-            SELECT
-                *,
-                side * token_amount AS signed_token_amount,
-                side * (future_price_yes - price_yes) AS markout,
-                CASE
-                    WHEN price_yes IS NOT NULL AND price_yes <> 0 AND future_price_yes IS NOT NULL
-                    THEN side * ((future_price_yes / price_yes) - 1.0) * 10000.0
-                    ELSE NULL
-                END AS markout_bps,
-                CASE
-                    WHEN side * (future_price_yes - price_yes) > 0 THEN 1
-                    ELSE 0
-                END AS label,
-                strftime(trade_time, '%Y-%m') AS year_month
-            FROM user_rows
+            SELECT *
+            FROM scored
             WHERE side IS NOT NULL
               AND future_price_yes IS NOT NULL
+              {future_lag_filter}
+              {ambiguous_markout_filter}
         )
         TO '{_sql_escape(labeled_dir)}'
         (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (year_month))
@@ -234,7 +252,11 @@ def label_user_trades(config: PipelineConfig, *, overwrite: bool = False) -> Pat
             stage_name="label_user_trades",
             dataset_dir=labeled_dir,
             time_column="trade_time",
-            extras={"horizon_minutes": config.label.horizon_minutes},
+            extras={
+                "horizon_minutes": config.label.horizon_minutes,
+                "max_future_lag_seconds": config.label.max_future_lag_seconds,
+                "min_abs_markout_bps": config.label.min_abs_markout_bps,
+            },
         )
         return labeled_dir
     finally:
@@ -260,11 +282,35 @@ def build_sequences(config: PipelineConfig, *, overwrite: bool = False) -> Path:
                     ) AS time_delta_seconds,
                     epoch(trade_time) - epoch(first_value(trade_time) OVER user_market_window) AS market_age_seconds,
                     CASE WHEN role = 'maker' THEN 1.0 ELSE 0.0 END AS role_is_maker,
+                    CAST(count(*) OVER market_hour_window AS DOUBLE) / 2.0 AS market_trade_count_1h,
+                    COALESCE(sum(usd_amount) OVER market_hour_window / 2.0, 0.0) AS market_volume_1h,
+                    COALESCE(avg(price_yes) OVER market_hour_window, price_yes, 0.0) AS market_price_mean_1h,
+                    COALESCE(stddev_pop(price_yes) OVER market_hour_window, 0.0) AS market_price_std_1h,
+                    COALESCE(price_yes - first_value(price_yes) OVER market_hour_window, 0.0) AS market_price_return_1h,
+                    CAST(count(*) OVER user_hour_window AS DOUBLE) AS user_trade_count_1h,
+                    CAST(count(*) OVER user_market_hour_window AS DOUBLE) AS user_market_trade_count_1h,
+                    COALESCE(sum(signed_token_amount) OVER user_hour_window, 0.0) AS user_signed_flow_1h,
+                    COALESCE(sum(usd_amount) OVER user_hour_window, 0.0) AS user_usd_volume_1h,
                     row_number() OVER user_market_window AS sequence_row_number
                 FROM read_parquet('{_sql_escape(labeled_glob)}')
                 WINDOW user_market_window AS (
                     PARTITION BY user, market_id
                     ORDER BY trade_time
+                ),
+                market_hour_window AS (
+                    PARTITION BY market_id
+                    ORDER BY trade_time
+                    RANGE BETWEEN INTERVAL 1 HOUR PRECEDING AND CURRENT ROW
+                ),
+                user_hour_window AS (
+                    PARTITION BY user
+                    ORDER BY trade_time
+                    RANGE BETWEEN INTERVAL 1 HOUR PRECEDING AND CURRENT ROW
+                ),
+                user_market_hour_window AS (
+                    PARTITION BY user, market_id
+                    ORDER BY trade_time
+                    RANGE BETWEEN INTERVAL 1 HOUR PRECEDING AND CURRENT ROW
                 )
             ),
             windowed AS (
@@ -283,29 +329,39 @@ def build_sequences(config: PipelineConfig, *, overwrite: bool = False) -> Path:
                     ROWS BETWEEN {window_size} PRECEDING AND CURRENT ROW
                 )
             )
-            SELECT
-                concat_ws(
-                    ':',
+            ,
+            assigned AS (
+                SELECT
+                    concat_ws(
+                        ':',
+                        user,
+                        market_id,
+                        strftime(sequence_end_ts, '%Y%m%d%H%M%S'),
+                        lpad(CAST(sequence_row_number AS VARCHAR), 8, '0')
+                    ) AS sequence_id,
                     user,
                     market_id,
-                    strftime(sequence_end_ts, '%Y%m%d%H%M%S'),
-                    lpad(CAST(sequence_row_number AS VARCHAR), 8, '0')
-                ) AS sequence_id,
-                user,
-                market_id,
-                sequence_start_ts,
-                sequence_end_ts,
-                {config.sequence.length} AS seq_len,
-                features,
-                label,
-                CASE
-                    WHEN epoch(sequence_end_ts) <= {train_cutoff} THEN 'train'
-                    WHEN epoch(sequence_end_ts) <= {validation_cutoff} THEN 'validation'
-                    ELSE 'test'
-                END AS split
-            FROM windowed
-            WHERE sequence_row_number >= {config.sequence.length}
-              AND ((sequence_row_number - {config.sequence.length}) % {config.sequence.stride}) = 0
+                    sequence_start_ts,
+                    sequence_end_ts,
+                    {config.sequence.length} AS seq_len,
+                    features,
+                    label,
+                    {_split_assignment_sql(
+                        "sequence_start_ts",
+                        "sequence_end_ts",
+                        train_cutoff=train_cutoff,
+                        validation_cutoff=validation_cutoff,
+                        purge_minutes=config.sequence.purge_minutes,
+                        embargo_minutes=config.sequence.embargo_minutes,
+                    )} AS split
+                FROM windowed
+                WHERE sequence_row_number >= {config.sequence.length}
+                  AND ((sequence_row_number - {config.sequence.length}) % {config.sequence.stride}) = 0
+            )
+            SELECT
+                *
+            FROM assigned
+            WHERE split IS NOT NULL
         )
         TO '{_sql_escape(sequence_dir)}'
         (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (split))
@@ -322,6 +378,8 @@ def build_sequences(config: PipelineConfig, *, overwrite: bool = False) -> Path:
                 "validation_cutoff_epoch": validation_cutoff,
                 "sequence_length": config.sequence.length,
                 "stride": config.sequence.stride,
+                "purge_minutes": config.sequence.purge_minutes,
+                "embargo_minutes": config.sequence.embargo_minutes,
             },
         )
         return sequence_dir
@@ -366,11 +424,35 @@ def build_model_windows(
                     ) AS time_delta_seconds,
                     epoch(trade_time) - epoch(first_value(trade_time) OVER user_market_window) AS market_age_seconds,
                     CASE WHEN role = 'maker' THEN 1.0 ELSE 0.0 END AS role_is_maker,
+                    CAST(count(*) OVER market_hour_window AS DOUBLE) / 2.0 AS market_trade_count_1h,
+                    COALESCE(sum(usd_amount) OVER market_hour_window / 2.0, 0.0) AS market_volume_1h,
+                    COALESCE(avg(price_yes) OVER market_hour_window, price_yes, 0.0) AS market_price_mean_1h,
+                    COALESCE(stddev_pop(price_yes) OVER market_hour_window, 0.0) AS market_price_std_1h,
+                    COALESCE(price_yes - first_value(price_yes) OVER market_hour_window, 0.0) AS market_price_return_1h,
+                    CAST(count(*) OVER user_hour_window AS DOUBLE) AS user_trade_count_1h,
+                    CAST(count(*) OVER user_market_hour_window AS DOUBLE) AS user_market_trade_count_1h,
+                    COALESCE(sum(signed_token_amount) OVER user_hour_window, 0.0) AS user_signed_flow_1h,
+                    COALESCE(sum(usd_amount) OVER user_hour_window, 0.0) AS user_usd_volume_1h,
                     row_number() OVER user_market_window AS window_row_number
                 FROM read_parquet('{_sql_escape(labeled_glob)}')
                 WINDOW user_market_window AS (
                     PARTITION BY user, market_id
                     ORDER BY trade_time
+                ),
+                market_hour_window AS (
+                    PARTITION BY market_id
+                    ORDER BY trade_time
+                    RANGE BETWEEN INTERVAL 1 HOUR PRECEDING AND CURRENT ROW
+                ),
+                user_hour_window AS (
+                    PARTITION BY user
+                    ORDER BY trade_time
+                    RANGE BETWEEN INTERVAL 1 HOUR PRECEDING AND CURRENT ROW
+                ),
+                user_market_hour_window AS (
+                    PARTITION BY user, market_id
+                    ORDER BY trade_time
+                    RANGE BETWEEN INTERVAL 1 HOUR PRECEDING AND CURRENT ROW
                 )
             ),
             windowed AS (
@@ -389,30 +471,40 @@ def build_model_windows(
                     ROWS BETWEEN {frame_size} PRECEDING AND CURRENT ROW
                 )
             )
-            SELECT
-                concat_ws(
-                    ':',
+            ,
+            assigned AS (
+                SELECT
+                    concat_ws(
+                        ':',
+                        user,
+                        market_id,
+                        strftime(window_end_ts, '%Y%m%d%H%M%S'),
+                        lpad(CAST(window_row_number AS VARCHAR), 8, '0')
+                    ) AS window_id,
                     user,
                     market_id,
-                    strftime(window_end_ts, '%Y%m%d%H%M%S'),
-                    lpad(CAST(window_row_number AS VARCHAR), 8, '0')
-                ) AS window_id,
-                user,
-                market_id,
-                window_start_ts,
-                window_end_ts,
-                {resolved_window_size} AS window_size,
-                features,
-                label,
-                CASE
-                    WHEN epoch(window_end_ts) <= {train_cutoff} THEN 'train'
-                    WHEN epoch(window_end_ts) <= {validation_cutoff} THEN 'validation'
-                    ELSE 'test'
-                END AS split
-            FROM windowed
-            WHERE window_row_number >= {resolved_window_size}
-              AND ((window_row_number - {resolved_window_size}) % {resolved_stride}) = 0
-              AND length(features) = {resolved_window_size}
+                    window_start_ts,
+                    window_end_ts,
+                    {resolved_window_size} AS window_size,
+                    features,
+                    label,
+                    {_split_assignment_sql(
+                        "window_start_ts",
+                        "window_end_ts",
+                        train_cutoff=train_cutoff,
+                        validation_cutoff=validation_cutoff,
+                        purge_minutes=config.model_windows.purge_minutes,
+                        embargo_minutes=config.model_windows.embargo_minutes,
+                    )} AS split
+                FROM windowed
+                WHERE window_row_number >= {resolved_window_size}
+                  AND ((window_row_number - {resolved_window_size}) % {resolved_stride}) = 0
+                  AND length(features) = {resolved_window_size}
+            )
+            SELECT
+                *
+            FROM assigned
+            WHERE split IS NOT NULL
         )
         TO '{_sql_escape(window_dir)}'
         (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (split))
@@ -428,6 +520,8 @@ def build_model_windows(
                     "length": resolved_window_size,
                     "stride": resolved_stride,
                     "feature_order": list(config.model_windows.feature_order),
+                    "purge_minutes": config.model_windows.purge_minutes,
+                    "embargo_minutes": config.model_windows.embargo_minutes,
                 },
                 "train_cutoff_epoch": train_cutoff,
                 "validation_cutoff_epoch": validation_cutoff,
@@ -528,12 +622,55 @@ def _feature_vector_sql(feature_order: tuple[str, ...]) -> str:
         "role_is_maker": "role_is_maker",
         "time_delta_seconds": "CAST(time_delta_seconds AS DOUBLE)",
         "market_age_seconds": "CAST(market_age_seconds AS DOUBLE)",
+        "market_trade_count_1h": "CAST(market_trade_count_1h AS DOUBLE)",
+        "market_volume_1h": "CAST(market_volume_1h AS DOUBLE)",
+        "market_price_mean_1h": "CAST(market_price_mean_1h AS DOUBLE)",
+        "market_price_std_1h": "CAST(market_price_std_1h AS DOUBLE)",
+        "market_price_return_1h": "CAST(market_price_return_1h AS DOUBLE)",
+        "user_trade_count_1h": "CAST(user_trade_count_1h AS DOUBLE)",
+        "user_market_trade_count_1h": "CAST(user_market_trade_count_1h AS DOUBLE)",
+        "user_signed_flow_1h": "CAST(user_signed_flow_1h AS DOUBLE)",
+        "user_usd_volume_1h": "CAST(user_usd_volume_1h AS DOUBLE)",
     }
     missing = [feature for feature in feature_order if feature not in sql_by_feature]
     if missing:
         raise ValueError(f"Unsupported sequence features requested: {missing}")
     ordered_sql = ", ".join(sql_by_feature[feature] for feature in feature_order)
     return f"list_value({ordered_sql})"
+
+
+def _split_assignment_sql(
+    start_column: str,
+    end_column: str,
+    *,
+    train_cutoff: float,
+    validation_cutoff: float,
+    purge_minutes: int,
+    embargo_minutes: int,
+) -> str:
+    purge_seconds = max(int(purge_minutes), 0) * 60.0
+    embargo_seconds = max(int(embargo_minutes), 0) * 60.0
+    if purge_seconds == 0.0 and embargo_seconds == 0.0:
+        return f"""
+        CASE
+            WHEN epoch({end_column}) <= {train_cutoff} THEN 'train'
+            WHEN epoch({end_column}) <= {validation_cutoff} THEN 'validation'
+            ELSE 'test'
+        END
+        """
+    train_end_epoch = train_cutoff - purge_seconds
+    validation_start_epoch = train_cutoff + embargo_seconds
+    validation_end_epoch = validation_cutoff - purge_seconds
+    test_start_epoch = validation_cutoff + embargo_seconds
+    return f"""
+    CASE
+        WHEN epoch({end_column}) <= {train_end_epoch} THEN 'train'
+        WHEN epoch({start_column}) >= {validation_start_epoch}
+         AND epoch({end_column}) <= {validation_end_epoch} THEN 'validation'
+        WHEN epoch({start_column}) >= {test_start_epoch} THEN 'test'
+        ELSE NULL
+    END
+    """
 
 
 def _stage_dir(config: PipelineConfig, stage_dirname: str, *, overwrite: bool) -> Path:

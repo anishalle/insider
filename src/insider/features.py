@@ -18,6 +18,15 @@ DEFAULT_FEATURE_ORDER = (
     "role_is_maker",
     "time_delta_seconds",
     "market_age_seconds",
+    "market_trade_count_1h",
+    "market_volume_1h",
+    "market_price_mean_1h",
+    "market_price_std_1h",
+    "market_price_return_1h",
+    "user_trade_count_1h",
+    "user_market_trade_count_1h",
+    "user_signed_flow_1h",
+    "user_usd_volume_1h",
 )
 
 

@@ -46,6 +46,8 @@ class LabelConfig:
     contract_addresses: tuple[str, ...] = DEFAULT_CONTRACT_ADDRESSES
     usd_decimals: int = 6
     token_decimals: int = 6
+    max_future_lag_seconds: int | None = None
+    min_abs_markout_bps: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,8 @@ class SequenceConfig:
     train_ratio: float = 0.8
     validation_ratio: float = 0.1
     test_ratio: float = 0.1
+    purge_minutes: int = 0
+    embargo_minutes: int = 0
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,8 @@ class ModelWindowConfig:
     train_ratio: float = 0.8
     validation_ratio: float = 0.1
     test_ratio: float = 0.1
+    purge_minutes: int = 0
+    embargo_minutes: int = 0
 
 
 @dataclass(frozen=True)
@@ -106,6 +112,8 @@ def load_config(path: Path) -> PipelineConfig:
         train_ratio=float(sequence_raw.get("train_ratio", 0.8)),
         validation_ratio=float(sequence_raw.get("validation_ratio", 0.1)),
         test_ratio=float(sequence_raw.get("test_ratio", 0.1)),
+        purge_minutes=int(sequence_raw.get("purge_minutes", 0)),
+        embargo_minutes=int(sequence_raw.get("embargo_minutes", 0)),
     )
 
     ratio_total = round(sequence.train_ratio + sequence.validation_ratio + sequence.test_ratio, 10)
@@ -113,6 +121,8 @@ def load_config(path: Path) -> PipelineConfig:
         raise ValueError("Sequence split ratios must sum to 1.0.")
     if sequence.length < 1 or sequence.stride < 1:
         raise ValueError("Sequence length and stride must be positive integers.")
+    if sequence.purge_minutes < 0 or sequence.embargo_minutes < 0:
+        raise ValueError("Sequence purge and embargo minutes must be non-negative.")
 
     model_windows = ModelWindowConfig(
         length=int(model_windows_raw.get("length", 50)),
@@ -121,6 +131,8 @@ def load_config(path: Path) -> PipelineConfig:
         train_ratio=float(model_windows_raw.get("train_ratio", 0.8)),
         validation_ratio=float(model_windows_raw.get("validation_ratio", 0.1)),
         test_ratio=float(model_windows_raw.get("test_ratio", 0.1)),
+        purge_minutes=int(model_windows_raw.get("purge_minutes", 0)),
+        embargo_minutes=int(model_windows_raw.get("embargo_minutes", 0)),
     )
 
     model_ratio_total = round(
@@ -131,6 +143,25 @@ def load_config(path: Path) -> PipelineConfig:
         raise ValueError("Model window split ratios must sum to 1.0.")
     if model_windows.length < 1 or model_windows.stride < 1:
         raise ValueError("Model window length and stride must be positive integers.")
+    if model_windows.purge_minutes < 0 or model_windows.embargo_minutes < 0:
+        raise ValueError("Model window purge and embargo minutes must be non-negative.")
+
+    label = LabelConfig(
+        horizon_minutes=int(label_raw.get("horizon_minutes", 5)),
+        contract_addresses=tuple(label_raw.get("contract_addresses", DEFAULT_CONTRACT_ADDRESSES)),
+        usd_decimals=int(label_raw.get("usd_decimals", 6)),
+        token_decimals=int(label_raw.get("token_decimals", 6)),
+        max_future_lag_seconds=(
+            int(label_raw["max_future_lag_seconds"])
+            if label_raw.get("max_future_lag_seconds") is not None
+            else None
+        ),
+        min_abs_markout_bps=float(label_raw.get("min_abs_markout_bps", 0.0)),
+    )
+    if label.max_future_lag_seconds is not None and label.max_future_lag_seconds < 0:
+        raise ValueError("label.max_future_lag_seconds must be non-negative when provided.")
+    if label.min_abs_markout_bps < 0.0:
+        raise ValueError("label.min_abs_markout_bps must be non-negative.")
 
     return PipelineConfig(
         inputs=InputConfig(
@@ -151,12 +182,7 @@ def load_config(path: Path) -> PipelineConfig:
             temp_directory=Path(runtime_raw.get("temp_directory", "tmp/duckdb")),
             preserve_insertion_order=bool(runtime_raw.get("preserve_insertion_order", False)),
         ),
-        label=LabelConfig(
-            horizon_minutes=int(label_raw.get("horizon_minutes", 5)),
-            contract_addresses=tuple(label_raw.get("contract_addresses", DEFAULT_CONTRACT_ADDRESSES)),
-            usd_decimals=int(label_raw.get("usd_decimals", 6)),
-            token_decimals=int(label_raw.get("token_decimals", 6)),
-        ),
+        label=label,
         sequence=sequence,
         model_windows=model_windows,
         smoke=SmokeConfig(

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 
 from modeling_common.artifacts import write_predictions_parquet
+from modeling_common.diagnostics import build_debug_diagnostics
 from modeling_common.metrics import binary_classification_metrics
 from modeling_common.dataset import summarize_dataset
 
@@ -21,7 +22,7 @@ from xgb_model.artifacts import (
     write_model_json,
 )
 from xgb_model.config import WindowConfig, load_window_config
-from xgb_model.data import build_flattened_feature_names, load_split_arrays
+from xgb_model.data import build_augmented_feature_names, load_split_arrays
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class EvalResult:
     ids: List[str]
     labels: np.ndarray
     probabilities: np.ndarray
+    logits: np.ndarray
     metrics: Dict[str, object]
 
 
@@ -66,6 +68,11 @@ def main() -> None:
     parser.add_argument("--objective", type=str, default="binary:logistic", help="Training objective.")
     parser.add_argument("--seed", type=int, default=7, help="Random seed.")
     parser.add_argument("--nthread", type=int, default=None, help="Thread count override.")
+    parser.add_argument(
+        "--disable-summary-features",
+        action="store_true",
+        help="Disable derived window summary features and train on the flattened raw window only.",
+    )
     args = parser.parse_args()
 
     config = load_window_config(args.config, window_size=args.window_size)
@@ -89,6 +96,7 @@ def main() -> None:
         objective=args.objective,
         seed=args.seed,
         nthread=args.nthread,
+        include_summary_features=not args.disable_summary_features,
     )
 
     print(
@@ -124,6 +132,7 @@ def train_xgboost(
     objective: str,
     seed: int,
     nthread: Optional[int],
+    include_summary_features: bool,
 ) -> TrainResult:
     dataset_dir = config.dataset_dir
     if not dataset_dir.exists():
@@ -137,26 +146,33 @@ def train_xgboost(
         raise ValueError("Training split contains no negative labels.")
 
     feature_order = list(config.feature_order)
-    feature_count = len(feature_order) * config.window_size
-    flat_feature_names = build_flattened_feature_names(feature_order, config.window_size)
+    flat_feature_names = build_augmented_feature_names(
+        feature_order,
+        config.window_size,
+        include_summary_features=include_summary_features,
+    )
+    feature_count = len(flat_feature_names)
 
     train_arrays = load_split_arrays(
         dataset_dir,
         "train",
         batch_size=batch_size,
         row_count=train_summary.row_count,
+        include_summary_features=include_summary_features,
     )
     validation_arrays = load_split_arrays(
         dataset_dir,
         "validation",
         batch_size=eval_batch_size,
         row_count=split_summaries["validation"].row_count,
+        include_summary_features=include_summary_features,
     )
     test_arrays = load_split_arrays(
         dataset_dir,
         "test",
         batch_size=eval_batch_size,
         row_count=split_summaries["test"].row_count,
+        include_summary_features=include_summary_features,
     )
 
     xgb = load_external_xgboost()
@@ -250,6 +266,7 @@ def train_xgboost(
         "seed": seed,
         "nthread": params.get("nthread"),
         "scale_pos_weight": scale_pos_weight,
+        "include_summary_features": bool(include_summary_features),
     }
 
     summary_payload = build_summary_payload(
@@ -264,6 +281,7 @@ def train_xgboost(
         },
         training_config=training_config,
         feature_count=feature_count,
+        feature_names=flat_feature_names,
     )
     metrics_payload = {
         "best_iteration": best_iteration,
@@ -276,6 +294,32 @@ def train_xgboost(
 
     write_json(run_dir / "summary.json", summary_payload)
     write_json(run_dir / "metrics.json", metrics_payload)
+    write_json(
+        run_dir / "diagnostics.json",
+        build_debug_diagnostics(
+            split_payloads={
+                "train": {
+                    "labels": train_eval.labels,
+                    "probabilities": train_eval.probabilities,
+                    "logits": train_eval.logits,
+                },
+                "validation": {
+                    "labels": validation_eval.labels,
+                    "probabilities": validation_eval.probabilities,
+                    "logits": validation_eval.logits,
+                },
+                "test": {
+                    "labels": test_eval.labels,
+                    "probabilities": test_eval.probabilities,
+                    "logits": test_eval.logits,
+                },
+            },
+            reference_thresholds={
+                "default_0_5": 0.5,
+                "class_weight_adjusted": 1.0 / (1.0 + scale_pos_weight),
+            },
+        ),
+    )
     write_history_csv(run_dir / "history.csv", history)
     write_predictions_parquet(
         run_dir / "predictions_validation.parquet",
@@ -326,10 +370,12 @@ def _evaluate_booster(
 ) -> EvalResult:
     probabilities = _predict_probabilities(booster, dmatrix, best_iteration=best_iteration)
     metrics = binary_classification_metrics(np.asarray(labels, dtype=np.int64), probabilities)
+    logits = _safe_logit(probabilities)
     return EvalResult(
         ids=list(window_ids),
         labels=np.asarray(labels, dtype=np.int64),
         probabilities=probabilities,
+        logits=logits,
         metrics=metrics,
     )
 
@@ -356,6 +402,11 @@ def _build_history_rows(evals_result: Dict[str, Dict[str, List[float]]]) -> List
                     row[f"{dataset_name}_{metric_name}"] = float(metric_values[index])
         history.append(row)
     return history
+
+
+def _safe_logit(probabilities: np.ndarray) -> np.ndarray:
+    clipped = np.clip(np.asarray(probabilities, dtype=np.float64), 1e-6, 1.0 - 1e-6)
+    return np.log(clipped / (1.0 - clipped))
 
 
 def _best_validation_score(evals_result: Dict[str, Dict[str, List[float]]]) -> float:

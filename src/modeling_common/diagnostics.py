@@ -99,11 +99,67 @@ def validation_threshold_sweep(
     }
 
 
+def calibration_bins(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    *,
+    num_bins: int = 10,
+) -> Dict[str, object]:
+    y_true = np.asarray(labels, dtype=np.int64)
+    y_prob = np.asarray(probabilities, dtype=np.float64)
+    if y_true.shape != y_prob.shape:
+        raise ValueError("labels and probabilities must have the same shape.")
+    if y_true.size == 0:
+        return {"num_bins": int(num_bins), "bins": []}
+
+    edges = np.linspace(0.0, 1.0, num=max(2, int(num_bins)) + 1)
+    assignments = np.digitize(y_prob, edges[1:-1], right=False)
+    bins = []
+    for index in range(len(edges) - 1):
+        mask = assignments == index
+        row_count = int(mask.sum())
+        if row_count == 0:
+            continue
+        current_probabilities = y_prob[mask]
+        current_labels = y_true[mask]
+        bins.append(
+            {
+                "bin_index": index,
+                "lower": float(edges[index]),
+                "upper": float(edges[index + 1]),
+                "row_count": row_count,
+                "mean_probability": float(current_probabilities.mean()),
+                "positive_rate": float(current_labels.mean()),
+            }
+        )
+    return {"num_bins": int(num_bins), "bins": bins}
+
+
+def metrics_at_thresholds(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    thresholds: Mapping[str, float],
+) -> Dict[str, Dict[str, float | int]]:
+    return {
+        name: threshold_metrics(labels, probabilities, threshold)
+        for name, threshold in thresholds.items()
+    }
+
+
 def build_debug_diagnostics(
     *,
     split_payloads: Mapping[str, Mapping[str, np.ndarray]],
     reference_thresholds: Mapping[str, float],
 ) -> Dict[str, object]:
+    validation_best_thresholds = validation_threshold_sweep(
+        np.asarray(split_payloads["validation"]["labels"], dtype=np.int64),
+        np.asarray(split_payloads["validation"]["probabilities"], dtype=np.float64),
+        reference_thresholds=reference_thresholds,
+    )["best_by_metric"]
+    selected_thresholds = {
+        f"validation_best_{metric_name}": float(payload["threshold"])
+        for metric_name, payload in validation_best_thresholds.items()
+    }
     return {
         "reference_thresholds": {name: float(value) for name, value in reference_thresholds.items()},
         "splits": {
@@ -115,9 +171,24 @@ def build_debug_diagnostics(
             )
             for split, payload in split_payloads.items()
         },
+        "calibration": {
+            split: calibration_bins(
+                np.asarray(payload["labels"], dtype=np.int64),
+                np.asarray(payload["probabilities"], dtype=np.float64),
+            )
+            for split, payload in split_payloads.items()
+        },
         "validation_threshold_sweep": validation_threshold_sweep(
             np.asarray(split_payloads["validation"]["labels"], dtype=np.int64),
             np.asarray(split_payloads["validation"]["probabilities"], dtype=np.float64),
             reference_thresholds=reference_thresholds,
         ),
+        "split_metrics_at_validation_best_thresholds": {
+            split: metrics_at_thresholds(
+                np.asarray(payload["labels"], dtype=np.int64),
+                np.asarray(payload["probabilities"], dtype=np.float64),
+                selected_thresholds,
+            )
+            for split, payload in split_payloads.items()
+        },
     }

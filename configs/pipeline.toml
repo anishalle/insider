@@ -20,6 +20,8 @@ preserve_insertion_order = false
 horizon_minutes = 5
 usd_decimals = 6
 token_decimals = 6
+max_future_lag_seconds = 300
+min_abs_markout_bps = 5.0
 
 [sequence]
 length = 64
@@ -32,10 +34,21 @@ feature_order = [
   "role_is_maker",
   "time_delta_seconds",
   "market_age_seconds",
+  "market_trade_count_1h",
+  "market_volume_1h",
+  "market_price_mean_1h",
+  "market_price_std_1h",
+  "market_price_return_1h",
+  "user_trade_count_1h",
+  "user_market_trade_count_1h",
+  "user_signed_flow_1h",
+  "user_usd_volume_1h",
 ]
 train_ratio = 0.8
 validation_ratio = 0.1
 test_ratio = 0.1
+purge_minutes = 60
+embargo_minutes = 60
 
 [model_windows]
 length = 50
@@ -48,10 +61,21 @@ feature_order = [
   "role_is_maker",
   "time_delta_seconds",
   "market_age_seconds",
+  "market_trade_count_1h",
+  "market_volume_1h",
+  "market_price_mean_1h",
+  "market_price_std_1h",
+  "market_price_return_1h",
+  "user_trade_count_1h",
+  "user_market_trade_count_1h",
+  "user_signed_flow_1h",
+  "user_usd_volume_1h",
 ]
 train_ratio = 0.8
 validation_ratio = 0.1
 test_ratio = 0.1
+purge_minutes = 60
+embargo_minutes = 60
 
 [smoke]
 start = "2024-10-01T00:00:00Z"

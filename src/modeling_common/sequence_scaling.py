@@ -9,14 +9,28 @@ DEFAULT_LOG1P_FEATURES: Tuple[str, ...] = (
     "usd_amount",
     "time_delta_seconds",
     "market_age_seconds",
+    "market_trade_count_1h",
+    "market_volume_1h",
+    "user_trade_count_1h",
+    "user_market_trade_count_1h",
+    "user_usd_volume_1h",
 )
-DEFAULT_SIGNED_LOG1P_FEATURES: Tuple[str, ...] = ("signed_token_amount",)
+DEFAULT_SIGNED_LOG1P_FEATURES: Tuple[str, ...] = (
+    "signed_token_amount",
+    "user_signed_flow_1h",
+)
 DEFAULT_UNSCALED_FEATURES: Tuple[str, ...] = ("side", "role_is_maker")
 DEFAULT_CLIPPED_FEATURES: Tuple[str, ...] = (
     "signed_token_amount",
     "usd_amount",
     "time_delta_seconds",
     "market_age_seconds",
+    "market_trade_count_1h",
+    "market_volume_1h",
+    "user_trade_count_1h",
+    "user_market_trade_count_1h",
+    "user_signed_flow_1h",
+    "user_usd_volume_1h",
 )
 
 

@@ -18,6 +18,11 @@ from modeling_common.sequence_scaling import (
     build_default_scale_enabled,
     build_default_transform_kinds,
 )
+from modeling_common.tabular_scaling import TabularStandardizer, apply_tabular_standardization
+from modeling_common.window_features import (
+    build_window_summary_feature_names,
+    compute_window_summary_features,
+)
 
 
 def test_load_window_data_config_reads_output_and_window_defaults(tmp_path: Path) -> None:
@@ -177,6 +182,55 @@ def test_debug_diagnostics_include_threshold_sweep_and_split_summaries() -> None
     assert diagnostics["splits"]["validation"]["brier_score"] == brier_score_loss(labels, probabilities)
     assert diagnostics["splits"]["validation"]["metrics_at_reference_thresholds"]["default_0_5"]["f1"] > 0.0
     assert diagnostics["validation_threshold_sweep"]["best_by_metric"]["accuracy"]["threshold"] >= 0.0
+    assert diagnostics["calibration"]["validation"]["num_bins"] == 10
+    assert "validation_best_f1" in diagnostics["split_metrics_at_validation_best_thresholds"]["test"]
+
+
+def test_window_summary_features_and_names_are_consistent() -> None:
+    features = np.asarray(
+        [
+            [[1.0, 10.0], [3.0, 14.0], [5.0, 18.0]],
+            [[2.0, 20.0], [4.0, 24.0], [6.0, 28.0]],
+        ],
+        dtype=np.float32,
+    )
+
+    summary_features = compute_window_summary_features(features)
+    summary_names = build_window_summary_feature_names(("price_yes", "usd_amount"))
+
+    assert summary_features.shape == (2, 16)
+    assert len(summary_names) == 16
+    assert summary_names[:4] == [
+        "price_yes__summary_first",
+        "usd_amount__summary_first",
+        "price_yes__summary_last",
+        "usd_amount__summary_last",
+    ]
+    assert np.allclose(summary_features[0, :4], np.asarray([1.0, 10.0, 5.0, 18.0], dtype=np.float32))
+
+
+def test_tabular_standardizer_uses_train_only_stats() -> None:
+    train_features = np.asarray(
+        [
+            [1.0, 10.0],
+            [3.0, 14.0],
+            [5.0, 18.0],
+        ],
+        dtype=np.float32,
+    )
+    validation_features = np.asarray([[101.0, 1000.0]], dtype=np.float32)
+
+    standardizer = TabularStandardizer(("feature_a", "feature_b"))
+    standardizer.update(train_features)
+    stats = standardizer.finalize()
+
+    transformed_train = apply_tabular_standardization(train_features, stats)
+    transformed_validation = apply_tabular_standardization(validation_features, stats)
+
+    assert stats.row_count == 3
+    assert np.allclose(stats.mean, np.asarray([3.0, 14.0], dtype=np.float32))
+    assert np.allclose(transformed_train.mean(axis=0), np.zeros(2), atol=1e-6)
+    assert transformed_validation[0, 0] > 40.0
 
 
 def _write_split(path: Path, rows: list[tuple[str, list[list[list[float]]], list[int]]]) -> None:

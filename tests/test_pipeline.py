@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from insider.config import load_config
-from insider.pipeline import run_pipeline
+from insider.pipeline import label_user_trades, prepare_trades, run_pipeline
 
 
 def test_end_to_end_pipeline_builds_labeled_sequences(tmp_path: Path) -> None:
@@ -111,3 +111,85 @@ def test_end_to_end_pipeline_builds_labeled_sequences(tmp_path: Path) -> None:
     manifest = json.loads((output_root / "manifests" / "build_sequences.json").read_text())
     assert manifest["sequence_length"] == 2
     assert manifest["stride"] == 1
+
+
+def test_label_user_trades_filters_stale_and_ambiguous_examples(tmp_path: Path) -> None:
+    trades_path = tmp_path / "trades.parquet"
+    output_root = tmp_path / "outputs"
+    config_path = tmp_path / "pipeline.toml"
+
+    table = pa.table(
+        {
+            "timestamp": [1_704_067_200, 1_704_067_500, 1_704_067_800, 1_704_068_700],
+            "datetime": [
+                "2024-01-01 00:00:00",
+                "2024-01-01 00:05:00",
+                "2024-01-01 00:10:00",
+                "2024-01-01 00:25:00",
+            ],
+            "block_number": [1, 2, 3, 4],
+            "transaction_hash": ["tx1", "tx2", "tx3", "tx4"],
+            "contract": ["exchange"] * 4,
+            "event_id": ["event-1"] * 4,
+            "event_slug": ["election-2024"] * 4,
+            "event_title": ["Election"] * 4,
+            "market_id": ["market-1"] * 4,
+            "condition_id": ["condition-1"] * 4,
+            "question": ["Will X win?"] * 4,
+            "nonusdc_side": ["token1"] * 4,
+            "maker": ["user-a"] * 4,
+            "taker": ["user-b"] * 4,
+            "maker_direction": ["BUY"] * 4,
+            "taker_direction": ["SELL"] * 4,
+            "price": [0.5000, 0.5002, 0.70, 0.80],
+            "token_amount": [1_000_000, 1_000_000, 1_000_000, 1_000_000],
+            "usd_amount": [500_000, 500_200, 700_000, 800_000],
+            "asset_id": ["asset-1"] * 4,
+            "order_hash": ["o1", "o2", "o3", "o4"],
+        }
+    )
+    pq.write_table(table, trades_path)
+
+    config_path.write_text(
+        "\n".join(
+            [
+                "[inputs]",
+                f'trades_path = "{trades_path}"',
+                "",
+                "[output]",
+                f'root = "{output_root}"',
+                "",
+                "[runtime]",
+                'threads = 4',
+                'memory_limit = "1GB"',
+                f'temp_directory = "{tmp_path / "tmp"}"',
+                "",
+                "[label]",
+                "horizon_minutes = 5",
+                "max_future_lag_seconds = 300",
+                "min_abs_markout_bps = 5.0",
+            ]
+        )
+        + "\n"
+    )
+
+    config = load_config(config_path)
+    prepare_trades(config, overwrite=True)
+    label_user_trades(config, overwrite=True)
+
+    connection = duckdb.connect()
+    try:
+        rows = connection.execute(
+            f"""
+            SELECT user, trade_time, future_trade_time, future_lag_seconds, markout_bps
+            FROM read_parquet('{output_root / "labeled_user_trades" / "**" / "*.parquet"}')
+            ORDER BY user, trade_time
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert len(rows) == 2
+    assert {row[0] for row in rows} == {"user-a", "user-b"}
+    assert all(row[3] == 0.0 for row in rows)
+    assert all(abs(row[4]) > 5.0 for row in rows)

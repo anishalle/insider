@@ -6,6 +6,12 @@ The current target is a 5-minute forward markout label:
 - `label = 1` when the future YES price at `t + 5m` implies a positive user-side markout
 - `label = 0` otherwise
 
+The default repo config now adds a few conservative data-quality controls for model training:
+- stale labels are dropped when the matched future trade arrives more than `300s` after the target horizon
+- near-zero markouts are dropped when `abs(markout_bps) < 5`
+- sequence and model-window splits can purge and embargo boundary regions
+- model windows can include richer market-state and user-history context features
+
 The pipeline is staged to keep RAM bounded on Juno:
 1. `prepare-trades`
 2. `label-user-trades`

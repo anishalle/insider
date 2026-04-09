@@ -2,9 +2,10 @@
 
 This document describes the model-training code in this repo, the exact input contract it expects, how train/validation/test separation is enforced, what each model writes, and how to run the jobs on Juno.
 
-The current training stack contains three models:
+The current training stack contains four models:
 
 - logistic regression
+- XGBoost
 - vanilla RNN
 - LSTM
 
@@ -48,6 +49,7 @@ The window dataset is already time-split by the pipeline using:
 - `train_ratio = 0.8`
 - `validation_ratio = 0.1`
 - `test_ratio = 0.1`
+- optional `purge_minutes` and `embargo_minutes` around split boundaries
 
 Current verified counts from the reference run in [windowing-run-2026-04-06.md](/Users/ani/workspaces/github.com/anishalle/insider/references/windowing-run-2026-04-06.md):
 
@@ -77,7 +79,7 @@ The training code only requires:
 
 ### Feature tensor
 
-`features` is a `50 x 7` numeric tensor in this order:
+With the current repo config, `features` is a `50 x 16` numeric tensor in this order:
 
 1. `price_yes`
 2. `signed_token_amount`
@@ -86,6 +88,15 @@ The training code only requires:
 5. `role_is_maker`
 6. `time_delta_seconds`
 7. `market_age_seconds`
+8. `market_trade_count_1h`
+9. `market_volume_1h`
+10. `market_price_mean_1h`
+11. `market_price_std_1h`
+12. `market_price_return_1h`
+13. `user_trade_count_1h`
+14. `user_market_trade_count_1h`
+15. `user_signed_flow_1h`
+16. `user_usd_volume_1h`
 
 Meaning:
 
@@ -96,17 +107,20 @@ Meaning:
 - `role_is_maker`: `1.0` for maker, `0.0` for taker
 - `time_delta_seconds`: elapsed time since prior trade in the same `user + market_id` stream
 - `market_age_seconds`: elapsed time since the first trade in that stream
+- `market_*_1h`: one-hour market-state summaries available at trade time
+- `user_*_1h`: one-hour user-history summaries available at trade time
 
 ### Model input shapes
 
 Logistic regression uses flattened windows:
 
-- input shape: `350`
-- computed as `50 * 7`
+- input shape: `window_size * feature_width`
+
+XGBoost uses the same flattened windows plus derived window-summary features.
 
 RNN and LSTM use the sequence directly:
 
-- input shape: `50 x 7`
+- input shape: `50 x feature_width`
 
 ## Leakage Controls
 
@@ -141,7 +155,7 @@ Code:
 Implementation details:
 
 - standalone trainer, does not import the `insider` preprocessing package
-- flattens each `50 x 7` window to a `350`-feature vector
+- flattens each `window_size x feature_width` window to a tabular feature vector
 - computes a train-only standardization pass
 - applies weighted logistic loss with train-only positive-class weighting
 - optimizes with a custom Adam update in NumPy
@@ -171,6 +185,43 @@ Notes:
 - it uses streaming parquet reads so it does not need the full dataset resident at once
 - it writes the learned weights, bias, and standardization parameters as JSON
 
+## XGBoost
+
+Code:
+
+- [src/xgb_model/train.py](/Users/ani/workspaces/github.com/anishalle/insider/src/xgb_model/train.py)
+- [src/xgb_model/data.py](/Users/ani/workspaces/github.com/anishalle/insider/src/xgb_model/data.py)
+- [src/xgb_model/artifacts.py](/Users/ani/workspaces/github.com/anishalle/insider/src/xgb_model/artifacts.py)
+
+Implementation details:
+
+- standalone trainer using the external `xgboost` package
+- flattens the `window_size x feature_width` tensor and appends derived window-summary features by default
+- uses train-only class weighting through `scale_pos_weight`
+- selects the best boosting round by validation `AUC-ROC`
+- writes `diagnostics.json` with threshold-aware and calibration-oriented summaries
+- records `feature_names` plus `include_summary_features` in `summary.json`
+
+Default CLI:
+
+```bash
+PYTHONPATH=src python -m xgb_model.train \
+  --config configs/pipeline.toml \
+  --window-size 50
+```
+
+Default hyperparameters:
+
+- `num_round = 300`
+- `early_stopping_rounds = 30`
+- `learning_rate = 0.05`
+- `max_depth = 8`
+- `subsample = 0.8`
+- `colsample_bytree = 0.8`
+- `max_bin = 256`
+- `tree_method = hist`
+- `seed = 7`
+
 ## Vanilla RNN
 
 Code:
@@ -183,7 +234,7 @@ Code:
 Implementation details:
 
 - standalone PyTorch trainer
-- consumes the `50 x 7` tensor directly
+- consumes the `window_size x feature_width` tensor directly
 - uses `nn.RNN(..., nonlinearity="tanh", batch_first=True)`
 - uses the final hidden state for binary classification
 - trains with `BCEWithLogitsLoss(pos_weight=...)`
@@ -221,11 +272,14 @@ Code:
 Implementation details:
 
 - standalone PyTorch trainer
-- consumes the same `50 x 7` sequence input as the RNN
+- consumes the same `50 x feature_width` sequence input as the RNN
 - applies train-only per-feature standardization before the LSTM sees the sequence
+- derives train-only standardized window-summary features and concatenates them at the classifier head
 - uses `nn.LSTM(batch_first=True)`
-- takes the final step output and applies a dropout + linear head
+- supports `last`, `mean`, `max`, and `mean_last` pooling over the sequence output
+- defaults to `mean_last` pooling followed by dropout + linear head
 - uses train-only positive-class weighting through `BCEWithLogitsLoss`
+- trains with `AdamW`, gradient clipping, and a validation-driven `ReduceLROnPlateau` scheduler
 - selects the best checkpoint by validation `AUC-ROC`
 
 Default CLI:
@@ -245,8 +299,13 @@ Default hyperparameters:
 - `hidden_size = 128`
 - `num_layers = 1`
 - `dropout = 0.1`
+- `pooling = mean_last`
 - `learning_rate = 1e-3`
 - `weight_decay = 1e-4`
+- `gradient_clip_norm = 1.0`
+- `scheduler_factor = 0.5`
+- `scheduler_patience = 1`
+- `scheduler_min_lr = 1e-5`
 - `patience = 3`
 - `seed = 42`
 - `device = cuda if available else cpu`
@@ -286,6 +345,8 @@ By default, runs are written under the configured processed root:
 
 - logistic regression:
   - `<output.root>/models/logistic_regression/window_size=50/<timestamp>`
+- XGBoost:
+  - `<output.root>/models/xgboost/window_size=50/<timestamp>`
 - RNN:
   - `<output.root>/models/rnn/window_size=50/<timestamp>`
 - LSTM:
@@ -295,7 +356,7 @@ You can override that with `--output-dir`.
 
 ### Common output files
 
-All three trainers write:
+All four trainers write:
 
 - `summary.json`
 - `metrics.json`
@@ -303,11 +364,15 @@ All three trainers write:
 - `predictions_validation.parquet`
 - `predictions_test.parquet`
 
+XGBoost always writes:
+
+- `diagnostics.json`
+
 LSTM also optionally writes:
 
 - `diagnostics.json`
 
-Enable that artifact with `--debug-metrics`. It includes split-level probability and logit summaries, PR-AUC, Brier score, and a validation threshold sweep that makes weighted-loss runs easier to interpret.
+Enable the LSTM artifact with `--debug-metrics`. The diagnostics payload includes split-level probability and logit summaries, PR-AUC, Brier score, calibration bins, and validation-selected threshold reports.
 
 Prediction parquet schema:
 
@@ -351,9 +416,11 @@ Typical contents:
 - output root
 - window size
 - feature order
+- optional flattened or derived feature-name lists
 - split summaries
 - class weights
 - feature standardization metadata for the LSTM trainer
+- summary-feature standardization metadata for the LSTM trainer
 - hyperparameters or model config
 - best epoch
 - best validation `AUC-ROC`
@@ -438,6 +505,8 @@ Job scripts:
 
 - logistic regression:
   - [jobs/lr/run-normal.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/lr/run-normal.sbatch)
+- XGBoost:
+  - [jobs/xgboost/run-normal.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/xgboost/run-normal.sbatch)
 - RNN:
   - [jobs/rnn/run-gpu.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/rnn/run-gpu.sbatch)
 - LSTM:
@@ -450,6 +519,7 @@ From Juno:
 ```bash
 cd "/home/axa230262/work/001 research/insider"
 sbatch jobs/lr/run-normal.sbatch
+sbatch jobs/xgboost/run-normal.sbatch
 sbatch jobs/rnn/run-gpu.sbatch
 sbatch jobs/lstm/run-gpu.sbatch
 ```

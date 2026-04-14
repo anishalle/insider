@@ -7,14 +7,13 @@
 #SBATCH -o logs/slurm-%j.out
 #SBATCH -e logs/slurm-%j.err
 
-set -euo pipefail
-
 cd "$HOME/work/001 research/insider"
 mkdir -p logs analysis
 
 source ~/.bashrc
 eval "$(conda shell.bash hook)"
 conda activate g_retriever
+set -euo pipefail
 bash scripts/bootstrap-model-env.sh "$PWD" 1
 export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 

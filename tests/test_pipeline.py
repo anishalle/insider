@@ -111,6 +111,8 @@ def test_end_to_end_pipeline_builds_labeled_sequences(tmp_path: Path) -> None:
     manifest = json.loads((output_root / "manifests" / "build_sequences.json").read_text())
     assert manifest["sequence_length"] == 2
     assert manifest["stride"] == 1
+    assert manifest["provenance"]["config_path"] == str(config_path.resolve())
+    assert manifest["provenance"]["config_hash"] is not None
 
 
 def test_label_user_trades_filters_stale_and_ambiguous_examples(tmp_path: Path) -> None:

@@ -39,6 +39,7 @@ class WindowConfig:
     config_path: Path
     output_root: Path
     model_window_dirname: str
+    manifest_dirname: str
     window_size: int
     feature_order: Tuple[str, ...]
     runtime: RuntimeConfig
@@ -69,6 +70,7 @@ def load_window_config(config_path: Path, window_size: Optional[int] = None) -> 
         config_path=config_path,
         output_root=Path(output_raw.get("root", "outputs/default")),
         model_window_dirname=str(output_raw.get("model_window_dirname", "model_windows")),
+        manifest_dirname=str(output_raw.get("manifest_dirname", "manifests")),
         window_size=resolved_window_size,
         feature_order=feature_order,
         runtime=runtime,

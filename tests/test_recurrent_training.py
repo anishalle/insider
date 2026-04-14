@@ -65,6 +65,7 @@ def test_rnn_trainer_writes_expected_artifacts(tmp_path: Path, monkeypatch: pyte
     assert summary["model_name"] == "rnn"
     assert summary["window_size"] == 2
     assert summary["feature_order"] == list(FEATURE_ORDER)
+    assert summary["provenance"]["config_path"] == str(config_path.resolve())
     assert metrics["validation"]["row_count"] == 2
     assert metrics["test"]["row_count"] == 2
 
@@ -120,6 +121,7 @@ def test_lstm_trainer_writes_expected_artifacts(tmp_path: Path, monkeypatch: pyt
     assert summary["feature_standardization"]["enabled"] is True
     assert summary["model_config"]["debug_metrics"] is True
     assert summary["feature_shift_report_path"] == "feature_shift.json"
+    assert summary["provenance"]["config_path"] == str(config_path.resolve())
     assert metrics["validation"]["row_count"] == 2
     assert metrics["test"]["row_count"] == 2
     assert metrics["validation"]["pr_auc"] >= 0.0
@@ -129,6 +131,54 @@ def test_lstm_trainer_writes_expected_artifacts(tmp_path: Path, monkeypatch: pyt
     shift = json.loads((run_dir / "feature_shift.json").read_text())
     assert shift["split_positive_rates"]["train"] == summary["split_summaries"]["train"]["positive_rate"]
     assert len(shift["splits"]["validation"]["raw_feature_summary"][0]["position_mean"]) == 2
+
+
+def test_lstm_attention_pooling_can_disable_summary_features(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("torch")
+    from lstm.train import main as lstm_main
+
+    config_path = _write_window_dataset(tmp_path)
+    run_dir = tmp_path / "lstm-attention-run"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "lstm.train",
+            "--config",
+            str(config_path),
+            "--window-size",
+            "2",
+            "--output-dir",
+            str(run_dir),
+            "--hidden-size",
+            "4",
+            "--dropout",
+            "0.0",
+            "--epochs",
+            "2",
+            "--batch-size",
+            "2",
+            "--eval-batch-size",
+            "2",
+            "--learning-rate",
+            "0.01",
+            "--patience",
+            "2",
+            "--device",
+            "cpu",
+            "--pooling",
+            "attention",
+            "--disable-summary-features",
+        ],
+    )
+
+    lstm_main()
+
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["model_config"]["pooling"] == "attention"
+    assert summary["model_config"]["include_summary_features"] is False
+    assert summary["summary_feature_standardization"] is None
+    assert summary["summary_feature_count"] == 0
 
 
 def _assert_common_artifacts(run_dir: Path) -> None:

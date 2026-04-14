@@ -36,7 +36,10 @@ def main() -> None:
     positive_class_weight = float(train_summary.negative_rows) / float(train_summary.positive_rows)
     summary_payload = build_summary(
         model_name="rnn",
+        config_path=config.config_path,
         dataset_dir=dataset_dir,
+        output_root=config.output.root,
+        manifest_dirname=config.output.manifest_dirname,
         window_size=config.model_windows.length,
         feature_order=config.model_windows.feature_order,
         split_summaries=[summary.to_dict() for summary in split_summaries.values()],

@@ -9,6 +9,7 @@ from typing import Any
 
 from insider.config import PipelineConfig
 from insider.duckdb_utils import connect
+from modeling_common.provenance import build_stage_provenance
 
 
 def prepare_trades(
@@ -717,6 +718,10 @@ def _write_stage_manifest(
         "label": asdict(config.label),
         "sequence": asdict(config.sequence),
         "model_windows": asdict(config.model_windows),
+        "provenance": build_stage_provenance(
+            config_path=config.source_config_path,
+            output_root=config.output.root,
+        ),
         **extras,
     }
     manifest_path = config.output.root / config.output.manifest_dirname / f"{stage_name}.json"

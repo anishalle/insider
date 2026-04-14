@@ -5,6 +5,7 @@ from pathlib import Path
 
 from insider.analysis import visualize_signals
 from insider.config import load_config
+from insider.leaderboard import build_model_leaderboard
 from insider.pipeline import (
     build_model_windows,
     build_sequences,
@@ -27,10 +28,11 @@ def main() -> None:
         "run-pipeline",
         "smoke-test",
         "visualize-signals",
+        "build-model-leaderboard",
     ):
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("--config", type=Path, required=True, help="Path to the pipeline TOML config.")
-        if command != "visualize-signals":
+        if command not in {"visualize-signals", "build-model-leaderboard"}:
             command_parser.add_argument("--overwrite", action="store_true", help="Replace existing stage output.")
         if command in {"prepare-trades", "run-pipeline"}:
             command_parser.add_argument("--start", help="Optional inclusive UTC ISO timestamp filter.")
@@ -82,6 +84,12 @@ def main() -> None:
                 default=50,
                 help="Model-window size used for training-readiness estimates and optional summary reads.",
             )
+        if command == "build-model-leaderboard":
+            command_parser.add_argument(
+                "--output-path",
+                type=Path,
+                help="Optional CSV path for the generated leaderboard.",
+            )
 
     args = parser.parse_args()
     config = load_config(args.config)
@@ -111,6 +119,8 @@ def main() -> None:
             end=_parse_optional_datetime(args.end),
             overwrite=args.overwrite,
         )
+    elif args.command == "build-model-leaderboard":
+        result = build_model_leaderboard(config.output.root, output_path=args.output_path)
     else:
         if args.command == "smoke-test":
             result = smoke_test(config, overwrite=args.overwrite)
@@ -118,6 +128,7 @@ def main() -> None:
             result = visualize_signals(
                 config,
                 output_dir=args.output_dir,
+                config_path=args.config,
                 examples_per_class=args.examples_per_class,
                 ambiguous_examples=args.ambiguous_examples,
                 lookback_minutes=args.lookback_minutes,

@@ -8,8 +8,10 @@ from typing import List, Optional, Tuple
 
 @dataclass(frozen=True)
 class WindowConfig:
+    config_path: Path
     output_root: Path
     model_window_dirname: str
+    manifest_dirname: str
     window_size: int
     feature_order: Tuple[str, ...]
 
@@ -28,8 +30,10 @@ def load_window_config(config_path: Path, window_size: Optional[int] = None) -> 
     if not feature_order:
         raise ValueError("Could not parse model_windows.feature_order from %s" % config_path)
     return WindowConfig(
+        config_path=config_path.resolve(),
         output_root=Path(output_root),
         model_window_dirname=model_window_dirname,
+        manifest_dirname=_extract_scalar(text, "output", "manifest_dirname", default="manifests"),
         window_size=resolved_window_size,
         feature_order=feature_order,
     )

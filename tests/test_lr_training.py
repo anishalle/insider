@@ -73,6 +73,7 @@ def test_logistic_regression_trainer_writes_expected_artifacts(tmp_path: Path) -
     assert summary["window_size"] == 2
     assert summary["feature_order"] == list(FEATURE_ORDER)
     assert summary["class_weights"]["positive_rows"] == 3
+    assert summary["provenance"]["config_path"] == str(config_path.resolve())
     assert metrics["validation"]["auc_roc"] >= 0.5
     assert metrics["test"]["row_count"] == 2
     assert len(model_payload["weights"]) == 14

@@ -10,6 +10,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from modeling_common.provenance import build_run_provenance
+
 
 def prepare_run_directory(
     output_root: Path,
@@ -91,7 +93,10 @@ def write_model_json(
 def build_summary_payload(
     *,
     model_name: str,
+    config_path: Path | None,
     dataset_dir: Path,
+    output_root: Path,
+    manifest_dirname: str,
     window_size: int,
     feature_order: Sequence[str],
     split_summaries: Iterable[Dict[str, object]],
@@ -99,11 +104,20 @@ def build_summary_payload(
     training_config: Dict[str, object],
 ) -> Dict[str, object]:
     split_rows = list(split_summaries)
+    provenance = build_run_provenance(
+        config_path=config_path,
+        output_root=output_root,
+        dataset_dir=dataset_dir,
+        manifest_dirname=manifest_dirname,
+    )
     return {
         "model_name": model_name,
+        "created_at_utc": provenance["generated_at_utc"],
         "dataset_dir": str(dataset_dir),
+        "output_root": str(output_root),
         "window_size": window_size,
         "feature_count": len(feature_order) * window_size,
+        "feature_width": len(feature_order),
         "feature_order": list(feature_order),
         "split_summaries": split_rows,
         "class_weights": class_weights,
@@ -113,5 +127,5 @@ def build_summary_payload(
             "train_negative_rows": class_weights.get("train_negative_rows"),
             "train_positive_rate": class_weights.get("train_positive_rate"),
         },
+        "provenance": provenance,
     }
-

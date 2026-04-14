@@ -11,6 +11,7 @@ from typing import Any
 
 from insider.config import PipelineConfig
 from insider.duckdb_utils import connect
+from modeling_common.provenance import build_run_provenance
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ def visualize_signals(
     config: PipelineConfig,
     *,
     output_dir: Path | None = None,
+    config_path: Path | None = None,
     examples_per_class: int = 4,
     ambiguous_examples: int = 2,
     lookback_minutes: int = 60,
@@ -74,10 +76,30 @@ def visualize_signals(
     prepared_glob = _dataset_glob(prepared_dir) if prepared_dir.exists() else None
     window_dir = config.output.root / config.output.model_window_dirname / f"window_size={model_window_size}"
     window_glob = _dataset_glob(window_dir) if window_dir.exists() else None
+    resolved_config_path = config_path or config.source_config_path
 
     connection = connect(config.runtime, config.output.root)
     try:
+        analysis_provenance = {
+            "labeled": build_run_provenance(
+                config_path=resolved_config_path,
+                output_root=config.output.root,
+                dataset_dir=labeled_dir,
+                manifest_dirname=config.output.manifest_dirname,
+            ),
+            "model_windows": (
+                build_run_provenance(
+                    config_path=resolved_config_path,
+                    output_root=config.output.root,
+                    dataset_dir=window_dir,
+                    manifest_dirname=config.output.manifest_dirname,
+                )
+                if window_dir.exists()
+                else None
+            ),
+        }
         summary = _compute_summary(connection, labeled_glob)
+        summary["provenance"] = analysis_provenance
         monthly_balance = _fetch_monthly_balance(connection, labeled_glob)
         candidates = _select_candidates(
             connection,
@@ -91,6 +113,8 @@ def visualize_signals(
             window_glob=window_glob,
             model_window_size=model_window_size,
             stride=config.model_windows.stride,
+            expected_feature_width=len(config.model_windows.feature_order),
+            provenance=analysis_provenance,
         )
 
         for candidate in candidates:
@@ -337,6 +361,8 @@ def _compute_training_feasibility(
     window_glob: str | None,
     model_window_size: int,
     stride: int,
+    expected_feature_width: int,
+    provenance: dict[str, Any],
 ) -> dict[str, Any]:
     monthly_rates = _fetch_all(
         connection,
@@ -461,6 +487,13 @@ def _compute_training_feasibility(
 
     actual_window_summary = None
     if window_glob is not None:
+        total_window_rows = _fetch_one(
+            connection,
+            f"""
+            SELECT COUNT(*) AS row_count
+            FROM read_parquet('{_sql_escape(window_glob)}')
+            """,
+        )
         actual_window_summary = {
             "splits": _fetch_all(
                 connection,
@@ -469,6 +502,18 @@ def _compute_training_feasibility(
                     split,
                     COUNT(*) AS row_count,
                     AVG(CAST(label AS DOUBLE)) AS positive_rate
+                FROM read_parquet('{_sql_escape(window_glob)}')
+                GROUP BY 1
+                ORDER BY 1
+                """,
+            ),
+            "split_time_ranges": _fetch_all(
+                connection,
+                f"""
+                SELECT
+                    split,
+                    MIN(window_end_ts) AS min_window_end_ts,
+                    MAX(window_end_ts) AS max_window_end_ts
                 FROM read_parquet('{_sql_escape(window_glob)}')
                 GROUP BY 1
                 ORDER BY 1
@@ -486,6 +531,36 @@ def _compute_training_feasibility(
                     MAX(length(features[1])) AS max_feature_width
                 FROM read_parquet('{_sql_escape(window_glob)}')
                 """,
+            ),
+            "integrity": _fetch_one(
+                connection,
+                f"""
+                WITH split_overlap AS (
+                    SELECT
+                        COUNT(*) AS overlap_count
+                    FROM (
+                        SELECT window_id
+                        FROM read_parquet('{_sql_escape(window_glob)}')
+                        GROUP BY 1
+                        HAVING COUNT(DISTINCT split) > 1
+                    )
+                )
+                SELECT
+                    (SELECT overlap_count FROM split_overlap) AS overlapping_window_ids,
+                    SUM(CASE WHEN window_size != {model_window_size} THEN 1 ELSE 0 END) AS wrong_window_size_rows,
+                    SUM(CASE WHEN length(features) != {model_window_size} THEN 1 ELSE 0 END) AS wrong_feature_row_count_rows,
+                    SUM(
+                        CASE
+                            WHEN length(features) > 0 AND length(features[1]) != {expected_feature_width} THEN 1
+                            ELSE 0
+                        END
+                    ) AS wrong_feature_width_rows
+                FROM read_parquet('{_sql_escape(window_glob)}')
+                """,
+            ),
+            "manifest_consistency": _build_manifest_consistency(
+                actual_row_count=int(total_window_rows["row_count"]),
+                provenance=provenance.get("model_windows"),
             ),
         }
 
@@ -506,7 +581,39 @@ def _compute_training_feasibility(
         verdict = "feasible_now"
 
     return {
+        "provenance": provenance,
         "verdict": verdict,
+        "integrity_checks": {
+            "labeled_user_trades": _fetch_one(
+                connection,
+                f"""
+                WITH duplicate_keys AS (
+                    SELECT
+                        COUNT(*) AS duplicate_key_count,
+                        COALESCE(SUM(row_count - 1), 0) AS duplicate_row_count
+                    FROM (
+                        SELECT
+                            user,
+                            market_id,
+                            trade_time,
+                            role,
+                            transaction_hash,
+                            COUNT(*) AS row_count
+                        FROM read_parquet('{_sql_escape(labeled_glob)}')
+                        GROUP BY 1, 2, 3, 4, 5
+                        HAVING COUNT(*) > 1
+                    )
+                )
+                SELECT
+                    (SELECT duplicate_key_count FROM duplicate_keys) AS duplicate_key_count,
+                    (SELECT duplicate_row_count FROM duplicate_keys) AS duplicate_row_count,
+                    SUM(CASE WHEN future_trade_time < target_time THEN 1 ELSE 0 END) AS invalid_future_time_rows,
+                    SUM(CASE WHEN label IS NULL THEN 1 ELSE 0 END) AS null_label_rows,
+                    SUM(CASE WHEN markout_bps IS NULL THEN 1 ELSE 0 END) AS null_markout_bps_rows
+                FROM read_parquet('{_sql_escape(labeled_glob)}')
+                """,
+            ),
+        },
         "class_imbalance": {
             "majority_to_minority_ratio": imbalance_ratio,
             "monthly_positive_rate_range": monthly_rate_range,
@@ -527,6 +634,29 @@ def _compute_training_feasibility(
             },
             "actual_model_window_summary": actual_window_summary,
         },
+    }
+
+
+def _build_manifest_consistency(
+    *,
+    actual_row_count: int,
+    provenance: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if provenance is None:
+        return None
+    manifest_row_count = provenance.get("dataset_manifest_row_count")
+    if manifest_row_count is None:
+        return {
+            "manifest_found": False,
+            "manifest_row_count": None,
+            "actual_row_count": int(actual_row_count),
+            "row_count_matches": None,
+        }
+    return {
+        "manifest_found": True,
+        "manifest_row_count": int(manifest_row_count),
+        "actual_row_count": int(actual_row_count),
+        "row_count_matches": int(manifest_row_count) == int(actual_row_count),
     }
 
 

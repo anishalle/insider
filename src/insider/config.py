@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+import hashlib
 from pathlib import Path
 import tomllib
 
@@ -89,13 +90,16 @@ class PipelineConfig:
     sequence: SequenceConfig = field(default_factory=SequenceConfig)
     model_windows: ModelWindowConfig = field(default_factory=ModelWindowConfig)
     smoke: SmokeConfig = field(default_factory=SmokeConfig)
+    source_config_path: Path | None = None
+    source_config_hash: str | None = None
 
     def with_output_root(self, output_root: Path) -> "PipelineConfig":
         return replace(self, output=replace(self.output, root=output_root))
 
 
 def load_config(path: Path) -> PipelineConfig:
-    raw = tomllib.loads(path.read_text())
+    text = path.read_text()
+    raw = tomllib.loads(text)
 
     inputs_raw = raw.get("inputs", {})
     output_raw = raw.get("output", {})
@@ -189,4 +193,6 @@ def load_config(path: Path) -> PipelineConfig:
             start=_parse_optional_datetime(smoke_raw.get("start")),
             end=_parse_optional_datetime(smoke_raw.get("end")),
         ),
+        source_config_path=path.resolve(),
+        source_config_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
     )

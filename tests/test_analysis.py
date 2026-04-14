@@ -109,10 +109,16 @@ def test_visualize_signals_writes_summary_candidates_and_plots(tmp_path: Path) -
     assert summary["totals"]["rows"] == 10
     assert summary["totals"]["positive_rows"] > 0
     assert summary["totals"]["negative_rows"] > 0
+    assert summary["provenance"]["labeled"]["config_path"] == str(config_path.resolve())
+    assert summary["provenance"]["labeled"]["dataset_manifest_path"] is not None
 
     feasibility = json.loads((analysis_dir / "training_feasibility.json").read_text())
+    assert feasibility["provenance"]["labeled"]["config_hash"] is not None
+    assert feasibility["integrity_checks"]["labeled_user_trades"]["duplicate_row_count"] == 0
     assert feasibility["window_readiness"]["actual_model_window_summary"] is not None
     assert feasibility["window_readiness"]["actual_model_window_summary"]["shape"]["min_window_size"] == 2
+    assert feasibility["window_readiness"]["actual_model_window_summary"]["integrity"]["overlapping_window_ids"] == 0
+    assert feasibility["window_readiness"]["actual_model_window_summary"]["manifest_consistency"]["row_count_matches"] is True
 
     with (analysis_dir / "candidate_signals.csv").open() as handle:
         rows = list(csv.DictReader(handle))

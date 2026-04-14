@@ -17,6 +17,7 @@ import torch
 from torch import nn
 from modeling_common.diagnostics import build_debug_diagnostics
 from modeling_common.metrics import binary_classification_metrics
+from modeling_common.provenance import build_run_provenance
 from modeling_common.sequence_scaling import (
     SequenceStandardizationStats,
     SequenceStandardizer,
@@ -52,8 +53,10 @@ DEFAULT_CLIP_SAMPLE_ROWS = 250000
 
 @dataclass(frozen=True)
 class PipelineWindowConfig:
+    config_path: Path
     output_root: Path
     model_window_dirname: str
+    manifest_dirname: str
     feature_order: Tuple[str, ...]
     window_size: int
     dataset_dir: Path
@@ -97,7 +100,7 @@ class TrainResult:
     class_weight_pos: float
     class_weight_neg: float
     feature_standardization: SequenceStandardizationStats
-    summary_feature_standardization: TabularStandardizationStats
+    summary_feature_standardization: Optional[TabularStandardizationStats]
 
 
 class LSTMClassifier(nn.Module):
@@ -119,10 +122,11 @@ class LSTMClassifier(nn.Module):
             dropout=lstm_dropout,
             batch_first=True,
         )
-        if pooling not in {"last", "mean", "max", "mean_last"}:
+        if pooling not in {"last", "mean", "max", "mean_last", "attention"}:
             raise ValueError("Unsupported pooling mode: %s" % pooling)
         self.pooling = pooling
         pooled_size = hidden_size * 2 if pooling == "mean_last" else hidden_size
+        self.attention = nn.Linear(hidden_size, 1, bias=False) if pooling == "attention" else None
         self.summary_feature_size = int(summary_feature_size)
         self.dropout = nn.Dropout(dropout)
         self.head = nn.Linear(pooled_size + self.summary_feature_size, 1)
@@ -135,6 +139,12 @@ class LSTMClassifier(nn.Module):
             pooled = outputs.mean(dim=1)
         elif self.pooling == "max":
             pooled = outputs.max(dim=1).values
+        elif self.pooling == "attention":
+            if self.attention is None:
+                raise ValueError("attention layer is required for attention pooling.")
+            attention_logits = self.attention(outputs).squeeze(-1)
+            attention_weights = torch.softmax(attention_logits, dim=1)
+            pooled = torch.sum(outputs * attention_weights.unsqueeze(-1), dim=1)
         else:
             pooled = torch.cat((outputs[:, -1, :], outputs.mean(dim=1)), dim=1)
         if self.summary_feature_size > 0:
@@ -157,8 +167,13 @@ def main() -> None:
         "--pooling",
         type=str,
         default="mean_last",
-        choices=("last", "mean", "max", "mean_last"),
+        choices=("last", "mean", "max", "mean_last", "attention"),
         help="How to pool the LSTM outputs before the classifier head.",
+    )
+    parser.add_argument(
+        "--disable-summary-features",
+        action="store_true",
+        help="Disable the derived summary-feature head and train on the sequence alone.",
     )
     parser.add_argument("--epochs", type=int, default=12, help="Maximum training epochs.")
     parser.add_argument("--batch-size", type=int, default=1024, help="Training batch size.")
@@ -235,6 +250,7 @@ def main() -> None:
         seed=args.seed,
         device=device,
         pooling=args.pooling,
+        include_summary_features=not args.disable_summary_features,
     )
 
     write_run_artifacts(config, run_dir, args, result)
@@ -255,8 +271,10 @@ def load_window_config(config_path: Path, window_size: Optional[int]) -> Pipelin
     if not dataset_dir.exists():
         raise FileNotFoundError("Model-window dataset not found: %s" % dataset_dir)
     return PipelineWindowConfig(
+        config_path=config_path.resolve(),
         output_root=output_root,
         model_window_dirname=model_window_dirname,
+        manifest_dirname=str(output.get("manifest_dirname", "manifests")),
         feature_order=feature_order,
         window_size=resolved_window_size,
         dataset_dir=dataset_dir,
@@ -541,16 +559,21 @@ def train_lstm(
     seed: int,
     device: torch.device,
     pooling: str,
+    include_summary_features: bool,
 ) -> TrainResult:
     _, _, inferred_class_weight_pos, class_weight_neg = count_train_class_weights(config.dataset_dir, batch_size)
     class_weight_pos = (
         inferred_class_weight_pos if positive_class_weight is None else float(positive_class_weight)
     )
     feature_standardization = fit_train_standardizer(config.dataset_dir, config.feature_order, eval_batch_size)
-    summary_feature_standardization = fit_train_summary_standardizer(
-        config.dataset_dir,
-        config.feature_order,
-        eval_batch_size,
+    summary_feature_standardization = (
+        fit_train_summary_standardizer(
+            config.dataset_dir,
+            config.feature_order,
+            eval_batch_size,
+        )
+        if include_summary_features
+        else None
     )
     model = LSTMClassifier(
         input_size=len(config.feature_order),
@@ -558,7 +581,11 @@ def train_lstm(
         num_layers=num_layers,
         dropout=dropout,
         pooling=pooling,
-        summary_feature_size=len(summary_feature_standardization.feature_names),
+        summary_feature_size=(
+            len(summary_feature_standardization.feature_names)
+            if summary_feature_standardization is not None
+            else 0
+        ),
     )
     model.to(device)
 
@@ -597,13 +624,17 @@ def train_lstm(
                 dtype=torch.float32,
                 device=device,
             )
-            summary_tensor = torch.as_tensor(
-                apply_tabular_standardization(
-                    compute_window_summary_features(features),
-                    summary_feature_standardization,
-                ),
-                dtype=torch.float32,
-                device=device,
+            summary_tensor = (
+                torch.as_tensor(
+                    apply_tabular_standardization(
+                        compute_window_summary_features(features),
+                        summary_feature_standardization,
+                    ),
+                    dtype=torch.float32,
+                    device=device,
+                )
+                if summary_feature_standardization is not None
+                else None
             )
             labels_tensor = torch.as_tensor(labels, dtype=torch.float32, device=device)
             optimizer.zero_grad()
@@ -652,15 +683,28 @@ def train_lstm(
                     "num_layers": num_layers,
                     "dropout": dropout,
                     "pooling": pooling,
-                    "summary_feature_size": len(summary_feature_standardization.feature_names),
+                    "summary_feature_size": (
+                        len(summary_feature_standardization.feature_names)
+                        if summary_feature_standardization is not None
+                        else 0
+                    ),
+                    "include_summary_features": bool(summary_feature_standardization is not None),
                 },
                 "feature_order": list(config.feature_order),
-                "summary_feature_order": list(summary_feature_standardization.feature_names),
+                "summary_feature_order": (
+                    list(summary_feature_standardization.feature_names)
+                    if summary_feature_standardization is not None
+                    else []
+                ),
                 "window_size": config.window_size,
                 "best_epoch": epoch,
                 "best_validation_auc_roc": current_validation_auc,
                 "feature_standardization": feature_standardization.to_dict(),
-                "summary_feature_standardization": summary_feature_standardization.to_dict(),
+                "summary_feature_standardization": (
+                    summary_feature_standardization.to_dict()
+                    if summary_feature_standardization is not None
+                    else None
+                ),
             }
             epochs_without_improvement = 0
         else:
@@ -724,7 +768,7 @@ def evaluate_split(
     device: torch.device,
     *,
     feature_standardization: SequenceStandardizationStats,
-    summary_feature_standardization: TabularStandardizationStats,
+    summary_feature_standardization: Optional[TabularStandardizationStats],
 ) -> EvalResult:
     model.eval()
     all_ids: List[str] = []
@@ -741,13 +785,17 @@ def evaluate_split(
                 dtype=torch.float32,
                 device=device,
             )
-            summary_tensor = torch.as_tensor(
-                apply_tabular_standardization(
-                    compute_window_summary_features(features),
-                    summary_feature_standardization,
-                ),
-                dtype=torch.float32,
-                device=device,
+            summary_tensor = (
+                torch.as_tensor(
+                    apply_tabular_standardization(
+                        compute_window_summary_features(features),
+                        summary_feature_standardization,
+                    ),
+                    dtype=torch.float32,
+                    device=device,
+                )
+                if summary_feature_standardization is not None
+                else None
             )
             labels_tensor = torch.as_tensor(labels, dtype=torch.float32, device=device)
             logits = model(features_tensor, summary_tensor)
@@ -778,6 +826,12 @@ def evaluate_split(
 
 def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argparse.Namespace, result: TrainResult) -> None:
     split_summaries = {split: summarize_split(config.dataset_dir, split, args.eval_batch_size).to_dict() for split in SPLITS}
+    provenance = build_run_provenance(
+        config_path=config.config_path,
+        output_root=config.output_root,
+        dataset_dir=config.dataset_dir,
+        manifest_dirname=config.manifest_dirname,
+    )
     feature_shift_report = build_feature_shift_report(
         config.dataset_dir,
         feature_order=config.feature_order,
@@ -787,16 +841,18 @@ def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argpa
     )
     summary = {
         "model_name": "lstm",
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "created_at_utc": provenance["generated_at_utc"],
         "dataset_dir": str(config.dataset_dir),
         "output_root": str(config.output_root),
         "window_size": config.window_size,
+        "feature_count": len(config.feature_order),
         "feature_order": list(config.feature_order),
         "model_config": {
             "hidden_size": args.hidden_size,
             "num_layers": args.num_layers,
             "dropout": args.dropout,
             "pooling": args.pooling,
+            "include_summary_features": not args.disable_summary_features,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "eval_batch_size": args.eval_batch_size,
@@ -819,7 +875,16 @@ def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argpa
             "negative": result.class_weight_neg,
         },
         "feature_standardization": result.feature_standardization.to_dict(),
-        "summary_feature_standardization": result.summary_feature_standardization.to_dict(),
+        "summary_feature_standardization": (
+            result.summary_feature_standardization.to_dict()
+            if result.summary_feature_standardization is not None
+            else None
+        ),
+        "summary_feature_count": (
+            len(result.summary_feature_standardization.feature_names)
+            if result.summary_feature_standardization is not None
+            else 0
+        ),
         "best_epoch": result.best_epoch,
         "best_validation_auc_roc": result.best_validation_auc_roc,
         "row_counts": {
@@ -828,6 +893,7 @@ def write_run_artifacts(config: PipelineWindowConfig, run_dir: Path, args: argpa
             "test": int(result.test_eval.metrics["row_count"]),
         },
         "feature_shift_report_path": "feature_shift.json",
+        "provenance": provenance,
     }
     metrics = {
         "train": result.train_eval.metrics,

@@ -214,7 +214,10 @@ def train_logistic_regression(
     }
     summary_payload = build_summary_payload(
         model_name="logistic_regression",
+        config_path=config.config_path,
         dataset_dir=dataset_dir,
+        output_root=config.output_root,
+        manifest_dirname=config.manifest_dirname,
         window_size=config.window_size,
         feature_order=feature_order,
         split_summaries=[split_summaries[split].to_dict() for split in ("train", "validation", "test")],

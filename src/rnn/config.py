@@ -30,6 +30,7 @@ DEFAULT_FEATURE_ORDER = (
 class OutputConfig:
     root: Path
     model_window_dirname: str = "model_windows"
+    manifest_dirname: str = "manifests"
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,7 @@ def load_config(config_path: Path, window_size: Optional[int] = None) -> Trainin
         output=OutputConfig(
             root=Path(output_raw.get("root", "outputs/default")),
             model_window_dirname=str(output_raw.get("model_window_dirname", "model_windows")),
+            manifest_dirname=str(output_raw.get("manifest_dirname", "manifests")),
         ),
         model_windows=model_windows,
     )

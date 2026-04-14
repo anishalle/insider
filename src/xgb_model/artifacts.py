@@ -10,6 +10,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from modeling_common.provenance import build_run_provenance
+
 
 def make_run_dir(output_root: Path, model_name: str, window_size: int, output_dir: Optional[Path] = None) -> Path:
     if output_dir is not None:
@@ -64,7 +66,10 @@ def write_model_json(path: Path, booster: Any) -> None:
 def build_summary_payload(
     *,
     model_name: str,
+    config_path: Path | None,
     dataset_dir: Path,
+    output_root: Path,
+    manifest_dirname: str,
     window_size: int,
     feature_order: Sequence[str],
     feature_names: Sequence[str],
@@ -73,14 +78,24 @@ def build_summary_payload(
     training_config: Dict[str, object],
     feature_count: int,
 ) -> Dict[str, object]:
+    provenance = build_run_provenance(
+        config_path=config_path,
+        output_root=output_root,
+        dataset_dir=dataset_dir,
+        manifest_dirname=manifest_dirname,
+    )
     return {
         "model_name": model_name,
+        "created_at_utc": provenance["generated_at_utc"],
         "dataset_dir": str(dataset_dir),
+        "output_root": str(output_root),
         "window_size": window_size,
         "feature_count": feature_count,
+        "feature_width": len(feature_order),
         "feature_order": list(feature_order),
         "feature_names": list(feature_names),
         "split_summaries": list(split_summaries),
         "class_weights": class_weights,
         "training_config": training_config,
+        "provenance": provenance,
     }

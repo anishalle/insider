@@ -393,6 +393,7 @@ def build_model_windows(
     *,
     window_size: int | None = None,
     stride: int | None = None,
+    output_dir: Path | None = None,
     overwrite: bool = False,
 ) -> Path:
     labeled_glob = _dataset_glob(config.output.root / config.output.labeled_dirname)
@@ -402,7 +403,12 @@ def build_model_windows(
         raise ValueError("Model window length and stride must be positive integers.")
 
     stage_dirname = f"{config.output.model_window_dirname}/window_size={resolved_window_size}"
-    window_dir = _stage_dir(config, stage_dirname, overwrite=overwrite)
+    window_dir = _stage_dir(
+        config,
+        stage_dirname,
+        overwrite=overwrite,
+        output_dir=output_dir,
+    )
     connection = connect(config.runtime, config.output.root)
     try:
         train_cutoff, validation_cutoff = _compute_model_window_split_cutoffs(
@@ -513,7 +519,11 @@ def build_model_windows(
         connection.execute(query)
         _write_stage_manifest(
             config,
-            stage_name=f"build_model_windows_{resolved_window_size}",
+            stage_name=(
+                f"build_model_windows_{resolved_window_size}_stride_{resolved_stride}"
+                if output_dir is not None or resolved_stride != config.model_windows.stride
+                else f"build_model_windows_{resolved_window_size}"
+            ),
             dataset_dir=window_dir,
             time_column="window_end_ts",
             extras={
@@ -674,8 +684,14 @@ def _split_assignment_sql(
     """
 
 
-def _stage_dir(config: PipelineConfig, stage_dirname: str, *, overwrite: bool) -> Path:
-    stage_dir = config.output.root / stage_dirname
+def _stage_dir(
+    config: PipelineConfig,
+    stage_dirname: str,
+    *,
+    overwrite: bool,
+    output_dir: Path | None = None,
+) -> Path:
+    stage_dir = output_dir if output_dir is not None else (config.output.root / stage_dirname)
     if stage_dir.exists():
         if not overwrite:
             raise FileExistsError(f"{stage_dir} already exists. Re-run with --overwrite to replace it.")

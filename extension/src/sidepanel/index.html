@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Insider Radar</title>
+    <link rel="stylesheet" href="./sidepanel.css" />
+  </head>
+  <body>
+    <main class="panel-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Realtime Polymarket Surveillance</p>
+          <h1>Insider Radar</h1>
+          <p id="market-subtitle" class="subtitle">Waiting for a Polymarket market page.</p>
+        </div>
+        <button id="refresh-button" class="button button-primary" type="button">Refresh</button>
+      </header>
+
+      <section id="status-strip" class="status-strip">
+        <div class="status-card">
+          <span class="status-label">Mode</span>
+          <strong id="mode-value">Idle</strong>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Wallets</span>
+          <strong id="wallet-count-value">0</strong>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Trades</span>
+          <strong id="trade-count-value">0</strong>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Spread</span>
+          <strong id="spread-value">-</strong>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Horizon Markout</h2>
+          <div id="horizon-buttons" class="button-row"></div>
+        </div>
+        <div id="horizon-output" class="empty-state">Select a horizon to compute markout for the current market.</div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Top Wallets</h2>
+          <span class="section-copy">Weighted live and post-event suspicion scores.</span>
+        </div>
+        <div id="wallet-list" class="wallet-list"></div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Linked Accounts</h2>
+          <span class="section-copy">Pairs with synchronized entry, age closeness, and aligned exposure.</span>
+        </div>
+        <div id="pair-list" class="pair-list"></div>
+      </section>
+    </main>
+    <script type="module" src="./sidepanel.js"></script>
+  </body>
+  </html>

@@ -15,6 +15,7 @@ source ~/.bashrc
 eval "$(conda shell.bash hook)"
 conda activate g_retriever
 set -euo pipefail
+bash scripts/require-clean-repo.sh "$PWD"
 bash scripts/bootstrap-model-env.sh "$PWD"
 export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 

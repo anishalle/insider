@@ -1,85 +1,39 @@
 # Model Training
 
-This document describes the model-training code in this repo, the exact input contract it expects, how train/validation/test separation is enforced, what each model writes, and how to run the jobs on Juno.
+This document describes the managed training stack in this repo, the current live Juno dataset it expects, the artifacts each trainer writes, and the tracked runs that are currently relevant.
 
-The current training stack contains four models:
+## Managed Trainers
+
+The repo currently contains four managed trainers:
 
 - logistic regression
 - XGBoost
 - vanilla RNN
 - LSTM
 
-All three models train on the dedicated exact-width model-window dataset, not the older `sequence_dataset`.
+All four train on `model_windows/window_size=<N>`. They do not consume `sequence_dataset` directly.
 
-## Purpose
+## Current Live Dataset Contract
 
-The preprocessing pipeline already produced reusable model windows under:
+Canonical live dataset on Juno:
 
 - `/home/axa230262/scratch/insider/processed/model_windows/window_size=50`
 
-The model code consumes that dataset directly and trains binary classifiers for the 5-minute forward markout signal.
+Verified live split counts on April 21, 2026:
 
-Target:
+| Split | Rows | Positive Rate |
+|---|---:|---:|
+| `train` | `3,018,859` | `0.5520396944673468` |
+| `validation` | `365,112` | `0.5003368829290739` |
+| `test` | `367,029` | `0.5001730108520035` |
 
-- `label = 1` if the final trade in the 50-step window has positive user-side markout
-- `label = 0` otherwise
+Verified live shape:
 
-Primary selection metric:
+- `window_size = 50`
+- `length(features) = 50`
+- `length(features[1]) = 16`
 
-- validation `AUC-ROC`
-
-Final reported evaluation:
-
-- test `AUC-ROC` from the checkpoint or parameter state selected on validation only
-
-## Data Contract
-
-### Source dataset
-
-All trainers read:
-
-- `processed/model_windows/window_size=<N>/split=train/*.parquet`
-- `processed/model_windows/window_size=<N>/split=validation/*.parquet`
-- `processed/model_windows/window_size=<N>/split=test/*.parquet`
-
-For the current run, `N = 50`.
-
-The window dataset is already time-split by the pipeline using:
-
-- `train_ratio = 0.8`
-- `validation_ratio = 0.1`
-- `test_ratio = 0.1`
-- optional `purge_minutes` and `embargo_minutes` around split boundaries
-
-Current verified counts from the reference run in [windowing-run-2026-04-06.md](/Users/ani/workspaces/github.com/anishalle/insider/references/windowing-run-2026-04-06.md):
-
-- `train`: `5,985,294`
-- `validation`: `747,974`
-- `test`: `747,919`
-
-### Per-row schema
-
-Each parquet row contains:
-
-- `window_id`
-- `user`
-- `market_id`
-- `window_start_ts`
-- `window_end_ts`
-- `window_size`
-- `features`
-- `label`
-- `split`
-
-The training code only requires:
-
-- `window_id`
-- `features`
-- `label`
-
-### Feature tensor
-
-With the current repo config, `features` is a `50 x 16` numeric tensor in this order:
+Current feature order:
 
 1. `price_yes`
 2. `signed_token_amount`
@@ -98,52 +52,43 @@ With the current repo config, `features` is a `50 x 16` numeric tensor in this o
 15. `user_signed_flow_1h`
 16. `user_usd_volume_1h`
 
-Meaning:
+Per-row schema used by the trainers:
 
-- `price_yes`: normalized YES-side price
-- `signed_token_amount`: positive for buy-like flow, negative for sell-like flow
-- `usd_amount`: trade notional
-- `side`: `+1` or `-1`
-- `role_is_maker`: `1.0` for maker, `0.0` for taker
-- `time_delta_seconds`: elapsed time since prior trade in the same `user + market_id` stream
-- `market_age_seconds`: elapsed time since the first trade in that stream
-- `market_*_1h`: one-hour market-state summaries available at trade time
-- `user_*_1h`: one-hour user-history summaries available at trade time
+- `window_id`
+- `features`
+- `label`
 
-### Model input shapes
+## Historical Comparability Warning
 
-Logistic regression uses flattened windows:
+`model_windows/window_size=50` has been rebuilt in place. Older April 7, 2026 runs used a previous `50 x 7` dataset with `7,481,187` rows at the same path.
 
-- input shape: `window_size * feature_width`
+That means historical runs are only comparable after checking the run’s own `summary.json`:
 
-XGBoost uses the same flattened windows plus derived window-summary features.
+- older 7-feature runs: logistic regression, RNN, and the first XGBoost/LSTM experiments
+- current 16-feature runs: the later XGBoost and LSTM experiments
 
-RNN and LSTM use the sequence directly:
-
-- input shape: `50 x feature_width`
+Do not assume the live manifest matches a historical model artifact.
 
 ## Leakage Controls
 
-The training code is intentionally conservative about leakage.
-
-Rules enforced by implementation:
+The training code is intentionally conservative:
 
 - it never recomputes splits
 - it reads only the stored `split=train`, `split=validation`, and `split=test` partitions
 - class weights are computed from the train split only
-- logistic-regression feature normalization is fit on the train split only
+- feature scaling is fit on the train split only
 - validation is used only for model selection and early stopping
 - test is evaluated only after selecting the best model state on validation
 
-What is not done:
+What it does not do:
 
-- no reshuffling across split boundaries
-- no global normalization over all rows
-- no oversampling or rebalancing using validation or test statistics
+- reshuffle across split boundaries
+- fit global normalization on all rows
+- oversample using validation or test statistics
 
-## Model Implementations
+## Trainer Summaries
 
-## Logistic Regression
+### Logistic Regression
 
 Code:
 
@@ -152,22 +97,12 @@ Code:
 - [src/lr/data.py](/Users/ani/workspaces/github.com/anishalle/insider/src/lr/data.py)
 - [src/lr/artifacts.py](/Users/ani/workspaces/github.com/anishalle/insider/src/lr/artifacts.py)
 
-Implementation details:
+Behavior:
 
-- standalone trainer, does not import the `insider` preprocessing package
-- flattens each `window_size x feature_width` window to a tabular feature vector
-- computes a train-only standardization pass
-- applies weighted logistic loss with train-only positive-class weighting
-- optimizes with a custom Adam update in NumPy
-- keeps the best parameter state by validation `AUC-ROC`
-
-Default CLI:
-
-```bash
-PYTHONPATH=src python -m lr.train \
-  --config configs/pipeline.toml \
-  --window-size 50
-```
+- flattens each `50 x feature_width` window into a tabular vector
+- computes train-only standardization
+- optimizes weighted logistic loss in NumPy
+- selects the best parameter state by validation `AUC-ROC`
 
 Default hyperparameters:
 
@@ -179,13 +114,7 @@ Default hyperparameters:
 - `patience = 5`
 - `seed = 7`
 
-Notes:
-
-- this is true logistic regression, not a tree model or MLP
-- it uses streaming parquet reads so it does not need the full dataset resident at once
-- it writes the learned weights, bias, and standardization parameters as JSON
-
-## XGBoost
+### XGBoost
 
 Code:
 
@@ -193,22 +122,13 @@ Code:
 - [src/xgb_model/data.py](/Users/ani/workspaces/github.com/anishalle/insider/src/xgb_model/data.py)
 - [src/xgb_model/artifacts.py](/Users/ani/workspaces/github.com/anishalle/insider/src/xgb_model/artifacts.py)
 
-Implementation details:
+Behavior:
 
-- standalone trainer using the external `xgboost` package
-- flattens the `window_size x feature_width` tensor and appends derived window-summary features by default
+- flattens the raw window
+- appends derived window-summary features by default
 - uses train-only class weighting through `scale_pos_weight`
 - selects the best boosting round by validation `AUC-ROC`
-- writes `diagnostics.json` with threshold-aware and calibration-oriented summaries
-- records `feature_names` plus `include_summary_features` in `summary.json`
-
-Default CLI:
-
-```bash
-PYTHONPATH=src python -m xgb_model.train \
-  --config configs/pipeline.toml \
-  --window-size 50
-```
+- writes threshold and calibration diagnostics
 
 Default hyperparameters:
 
@@ -222,7 +142,7 @@ Default hyperparameters:
 - `tree_method = hist`
 - `seed = 7`
 
-## Vanilla RNN
+### Vanilla RNN
 
 Code:
 
@@ -231,23 +151,12 @@ Code:
 - [src/rnn/data.py](/Users/ani/workspaces/github.com/anishalle/insider/src/rnn/data.py)
 - [src/rnn/artifacts.py](/Users/ani/workspaces/github.com/anishalle/insider/src/rnn/artifacts.py)
 
-Implementation details:
+Behavior:
 
-- standalone PyTorch trainer
-- consumes the `window_size x feature_width` tensor directly
+- consumes the raw `50 x feature_width` tensor directly
 - uses `nn.RNN(..., nonlinearity="tanh", batch_first=True)`
 - uses the final hidden state for binary classification
-- trains with `BCEWithLogitsLoss(pos_weight=...)`
 - selects the best checkpoint by validation `AUC-ROC`
-- runs final train, validation, and test prediction passes with the selected weights
-
-Default CLI:
-
-```bash
-PYTHONPATH=src python -m rnn.train \
-  --config configs/pipeline.toml \
-  --window-size 50
-```
 
 Default hyperparameters:
 
@@ -258,105 +167,65 @@ Default hyperparameters:
 - `num_layers = 1`
 - `dropout = 0.0`
 - `learning_rate = 1e-3`
-- `weight_decay = 0.0`
-- `patience = 5`
-- `seed = 42`
-- `device = cuda if available else cpu`
 
-## LSTM
+### LSTM
 
 Code:
 
 - [src/lstm/train.py](/Users/ani/workspaces/github.com/anishalle/insider/src/lstm/train.py)
 
-Implementation details:
+Behavior:
 
-- standalone PyTorch trainer
-- consumes the same `50 x feature_width` sequence input as the RNN
-- applies train-only per-feature standardization before the LSTM sees the sequence
-- derives train-only standardized window-summary features and concatenates them at the classifier head
-- uses `nn.LSTM(batch_first=True)`
-- supports `last`, `mean`, `max`, and `mean_last` pooling over the sequence output
-- defaults to `mean_last` pooling followed by dropout + linear head
-- uses train-only positive-class weighting through `BCEWithLogitsLoss`
-- trains with `AdamW`, gradient clipping, and a validation-driven `ReduceLROnPlateau` scheduler
+- consumes the raw `50 x feature_width` tensor directly
+- supports `last`, `mean`, `max`, `mean_last`, and `attention` pooling
+- applies train-only feature transforms, clipping, and standardization
+- optionally adds a summary-feature head
 - selects the best checkpoint by validation `AUC-ROC`
+- writes diagnostics when `--debug-metrics` is enabled
 
-Default CLI:
-
-```bash
-PYTHONPATH=src python -m lstm.train \
-  --config configs/pipeline.toml \
-  --window-size 50 \
-  --debug-metrics
-```
-
-Default hyperparameters:
+Common defaults:
 
 - `epochs = 12`
-- `batch_size = 1024`
-- `eval_batch_size = 2048`
 - `hidden_size = 128`
 - `num_layers = 1`
 - `dropout = 0.1`
-- `pooling = mean_last`
 - `learning_rate = 1e-3`
 - `weight_decay = 1e-4`
-- `gradient_clip_norm = 1.0`
-- `scheduler_factor = 0.5`
-- `scheduler_patience = 1`
-- `scheduler_min_lr = 1e-5`
-- `patience = 3`
-- `seed = 42`
-- `device = cuda if available else cpu`
 
-## Metrics
+## Current Tracked Run Summary
 
-All three models report binary classification metrics driven by predicted probabilities.
+### Current 16-feature dataset
 
-Core metrics:
+These are the strongest tracked managed runs on the live `50 x 16` dataset:
 
-- `auc_roc`
-- `accuracy`
-- `precision`
-- `recall`
-- `f1`
-- `positive_rate`
-- `predicted_positive_rate`
-- confusion-matrix counts:
-  - `true_positive`
-  - `true_negative`
-  - `false_positive`
-  - `false_negative`
+| Model | Run | Validation AUC | Test AUC | Notes |
+|---|---|---:|---:|---|
+| XGBoost | `20260409T050523Z` | `0.673342` | `0.668963` | summary features enabled |
+| LSTM | `20260414T044435Z` | `0.673177` | `0.670204` | attention pooling, no summary head |
+| LSTM | `20260409T042628Z` | `0.672597` | `0.670263` | `mean_last` pooling, summary head |
 
-Each split payload also includes:
+### Older 7-feature dataset
 
-- `row_count`
-- `positive_rows`
-- `negative_rows`
+These runs are still useful as historical reference, but they are not apples-to-apples with the current live dataset:
 
-Model-selection rule:
-
-- choose the epoch or parameter state with the best validation `auc_roc`
+| Model | Run | Validation AUC | Test AUC |
+|---|---|---:|---:|
+| XGBoost | `20260407T194550Z` | `0.669553` | `0.690606` |
+| LSTM | `20260407T171926Z` | `0.663738` | `0.686173` |
+| LSTM | `20260407T070523Z` | `0.653211` | `0.673302` |
+| RNN | `20260407T035704Z` | `0.582607` | `0.577572` |
+| Logistic regression | `20260407T101004Z` | `0.537038` | `0.529491` |
 
 ## Output Layout
 
-By default, runs are written under the configured processed root:
+Trainer outputs are written under:
 
-- logistic regression:
-  - `<output.root>/models/logistic_regression/window_size=50/<timestamp>`
-- XGBoost:
-  - `<output.root>/models/xgboost/window_size=50/<timestamp>`
-- RNN:
-  - `<output.root>/models/rnn/window_size=50/<timestamp>`
-- LSTM:
-  - `<output.root>/models/lstm/window_size=50/<timestamp>`
+- `<output.root>/models/logistic_regression/window_size=<N>/<timestamp>`
+- `<output.root>/models/xgboost/window_size=<N>/<timestamp>`
+- `<output.root>/models/rnn/window_size=<N>/<timestamp>`
+- `<output.root>/models/lstm/window_size=<N>/<timestamp>`
 
-You can override that with `--output-dir`.
-
-### Common output files
-
-All four trainers write:
+Common artifacts:
 
 - `summary.json`
 - `metrics.json`
@@ -364,242 +233,38 @@ All four trainers write:
 - `predictions_validation.parquet`
 - `predictions_test.parquet`
 
-XGBoost always writes:
+Model-specific artifacts:
 
-- `diagnostics.json`
+- logistic regression: `model.json`
+- RNN and LSTM: `checkpoint.pt`
+- XGBoost and debug-enabled LSTM: `diagnostics.json`
 
-LSTM also optionally writes:
+Aggregate reports default to:
 
-- `diagnostics.json`
-
-Enable the LSTM artifact with `--debug-metrics`. The diagnostics payload includes split-level probability and logit summaries, PR-AUC, Brier score, calibration bins, and validation-selected threshold reports.
-
-Prediction parquet schema:
-
-- `window_id`
-- `label`
-- `probability`
-- `prediction`
-- `split`
-
-### Model-specific artifacts
-
-Logistic regression also writes:
-
-- `model.json`
-
-This contains:
-
-- learned `weights`
-- `bias`
-- `feature_mean`
-- `feature_scale`
-- `feature_order`
-- `window_size`
-- `class_weights`
-- `hyperparameters`
-
-RNN and LSTM also write:
-
-- `checkpoint.pt`
-
-This contains the selected PyTorch model state and training metadata.
-
-### `summary.json`
-
-This is meant to be the quick run overview.
-
-Typical contents:
-
-- model name
-- dataset directory
-- output root
-- window size
-- feature order
-- optional flattened or derived feature-name lists
-- split summaries
-- class weights
-- feature standardization metadata for the LSTM trainer
-- summary-feature standardization metadata for the LSTM trainer
-- hyperparameters or model config
-- best epoch
-- best validation `AUC-ROC`
-
-The exact key names vary slightly across the three trainers, but the payloads are intentionally parallel.
-
-### `metrics.json`
-
-This is the main evaluation artifact.
-
-Typical contents:
-
-- `train`
-- `validation`
-- `test`
-- `best_epoch`
-- `best_validation_auc_roc`
-
-Each split block contains the metric set described above.
-
-### `history.csv`
-
-This stores epoch-level training history.
-
-Typical columns include:
-
-- `epoch`
-- `train_loss`
-- `validation_auc_roc`
-- `validation_accuracy`
-
-The LSTM history also records validation loss.
-
-## Environment and Packaging
-
-There are two different Python environments in this repo workflow.
-
-### Repo-local preprocessing environment
-
-The preprocessing and analysis code uses the repo-local `.venv` and the `insider` package.
-
-### Juno training environment
-
-The model trainers are designed to run in the Juno conda environment:
-
-- `g_retriever`
-
-Reason:
-
-- the repo itself is Python `>= 3.11`
-- `g_retriever` is Python `3.9`
-- the recurrent models need the CUDA-enabled PyTorch stack that already exists there
-
-To avoid mixing those concerns, the model trainers are standalone and are run with:
-
-- `PYTHONPATH=src`
-
-They do not import the main `insider` package during Juno training.
-
-## Bootstrap Script
-
-Juno model jobs use:
-
-- [bootstrap-model-env.sh](/Users/ani/workspaces/github.com/anishalle/insider/scripts/bootstrap-model-env.sh)
-
-Behavior:
-
-- activates the requested Python environment before it runs
-- checks for lightweight missing packages needed by the standalone trainers
-- installs:
-  - `numpy`
-  - `pyarrow`
-  - `scikit-learn`
-  - `tomli` on Python 3.9/3.10 when needed
-- optionally fails fast if `torch` is missing for GPU jobs
-
-It does not install the repo itself into `g_retriever`.
+- `<output.root>/reports/model_leaderboard.csv`
+- `<output.root>/reports/model_audit.csv`
 
 ## Juno Batch Workflow
 
 Job scripts:
 
-- logistic regression:
-  - [jobs/lr/run-normal.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/lr/run-normal.sbatch)
-- XGBoost:
-  - [jobs/xgboost/run-normal.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/xgboost/run-normal.sbatch)
-- RNN:
-  - [jobs/rnn/run-gpu.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/rnn/run-gpu.sbatch)
-- LSTM:
-  - [jobs/lstm/run-gpu.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/lstm/run-gpu.sbatch)
-
-### Submission
-
-From Juno:
-
-```bash
-cd "/home/axa230262/work/001 research/insider"
-sbatch jobs/lr/run-normal.sbatch
-sbatch jobs/xgboost/run-normal.sbatch
-sbatch jobs/rnn/run-gpu.sbatch
-sbatch jobs/lstm/run-gpu.sbatch
-```
-
-### Script behavior
+- logistic regression: [jobs/lr/run-normal.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/lr/run-normal.sbatch)
+- XGBoost: [jobs/xgboost/run-normal.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/xgboost/run-normal.sbatch)
+- RNN: [jobs/rnn/run-gpu.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/rnn/run-gpu.sbatch)
+- LSTM: [jobs/lstm/run-gpu.sbatch](/Users/ani/workspaces/github.com/anishalle/insider/jobs/lstm/run-gpu.sbatch)
 
 Each script:
 
 1. changes into the Juno repo checkout
 2. creates `logs/`
-3. initializes `conda`
-4. activates `g_retriever`
-5. runs `scripts/bootstrap-model-env.sh`
-6. exports `PYTHONPATH=src`
-7. launches the trainer module
+3. refuses to run from a dirty checkout unless you set `ALLOW_DIRTY_REPO=1`
+4. boots the required environment
+5. runs the standalone trainer from `PYTHONPATH=src`
 
-### Current resource choices
+The dedicated attention-LSTM script also refreshes the leaderboard after training, but it now writes that CSV under `<output.root>/reports/` instead of the repo checkout.
 
-Logistic regression:
+## Environment Notes
 
-- partition: `normal`
-- CPUs: `32`
-- memory: `192G`
+The preprocessing path uses the repo-local `.venv`.
 
-RNN:
-
-- partition: `a30`
-- GPUs: `1`
-- CPUs: `32`
-- memory: `192G`
-
-LSTM:
-
-- default script partition: `a30`
-- GPUs: `1`
-- CPUs: `32`
-- memory: `192G`
-
-If `a30` is saturated but `h100` is free, you can override at submission time:
-
-```bash
-sbatch -p h100 jobs/lstm/run-gpu.sbatch
-```
-
-or:
-
-```bash
-sbatch -p h100 jobs/rnn/run-gpu.sbatch
-```
-
-## Local Testing
-
-Current test coverage includes:
-
-- shared dataset/metrics utility tests
-- logistic-regression end-to-end smoke training on a tiny synthetic dataset
-- Python 3.9 AST parse checks for all trainer packages
-- optional recurrent import smoke checks when local `torch` is installed
-
-Relevant tests:
-
-- [tests/test_lr_training.py](/Users/ani/workspaces/github.com/anishalle/insider/tests/test_lr_training.py)
-- [tests/test_model_trainers.py](/Users/ani/workspaces/github.com/anishalle/insider/tests/test_model_trainers.py)
-- [tests/test_modeling_common.py](/Users/ani/workspaces/github.com/anishalle/insider/tests/test_modeling_common.py)
-
-## Operational Notes
-
-- The trainers stream parquet batches rather than loading the entire dataset at once.
-- Validation and test prediction files can still be large because they contain one row per example.
-- Slurm log files may remain empty for a while due to buffering.
-- The model-output directories should stay out of Git and remain under scratch-backed storage.
-- If you want comparable experiments across models, keep `window_size`, feature order, and the underlying processed dataset fixed.
-
-## Recommended Reading Order
-
-For the full training context, read:
-
-1. [pipeline.md](/Users/ani/workspaces/github.com/anishalle/insider/docs/pipeline.md)
-2. [output_dataset.md](/Users/ani/workspaces/github.com/anishalle/insider/docs/output_dataset.md)
-3. [models.md](/Users/ani/workspaces/github.com/anishalle/insider/docs/models.md)
-4. [windowing-run-2026-04-06.md](/Users/ani/workspaces/github.com/anishalle/insider/references/windowing-run-2026-04-06.md)
-
-That sequence moves from preprocessing, to final data contract, to model implementation, to the verified reference run that produced the current `window_size=50` training dataset.
+The heavy model jobs are designed for the Juno `g_retriever` conda environment plus the bootstrap helper in [scripts/bootstrap-model-env.sh](/Users/ani/workspaces/github.com/anishalle/insider/scripts/bootstrap-model-env.sh).

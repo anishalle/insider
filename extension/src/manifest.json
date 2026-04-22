@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Insider Polymarket Radar",
+  "description": "Realtime Polymarket surveillance with live suspicion scoring and post-event markout analysis.",
+  "version": "0.1.0",
+  "permissions": ["storage", "tabs", "sidePanel", "alarms", "scripting"],
+  "host_permissions": [
+    "https://polymarket.com/*",
+    "https://gamma-api.polymarket.com/*",
+    "https://data-api.polymarket.com/*",
+    "https://clob.polymarket.com/*",
+    "https://ws-subscriptions-clob.polymarket.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open Insider Radar"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://polymarket.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

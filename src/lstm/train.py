@@ -159,6 +159,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="lstm.train", description="Train an LSTM on model windows.")
     parser.add_argument("--config", type=Path, required=True, help="Path to configs/pipeline.toml.")
     parser.add_argument("--window-size", type=int, default=None, help="Override model-window size.")
+    parser.add_argument("--dataset-dir", type=Path, default=None, help="Optional override for the model-window dataset directory.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Directory for model artifacts.")
     parser.add_argument("--hidden-size", type=int, default=128, help="Hidden size for the LSTM.")
     parser.add_argument("--num-layers", type=int, default=1, help="Number of LSTM layers.")
@@ -225,7 +226,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    config = load_window_config(args.config, args.window_size)
+    config = load_window_config(args.config, args.window_size, dataset_dir=args.dataset_dir)
     run_dir = prepare_run_dir(config, args.output_dir)
     device = choose_device(args.device)
     set_seed(args.seed)
@@ -257,7 +258,12 @@ def main() -> None:
     print(json.dumps({"run_dir": str(run_dir), "best_epoch": result.best_epoch, "best_validation_auc_roc": result.best_validation_auc_roc}, indent=2))
 
 
-def load_window_config(config_path: Path, window_size: Optional[int]) -> PipelineWindowConfig:
+def load_window_config(
+    config_path: Path,
+    window_size: Optional[int],
+    *,
+    dataset_dir: Path | None = None,
+) -> PipelineWindowConfig:
     raw = parse_simple_toml(config_path)
     output = raw.get("output", {})
     model_windows = raw.get("model_windows", {})
@@ -267,9 +273,9 @@ def load_window_config(config_path: Path, window_size: Optional[int]) -> Pipelin
         raise ValueError("model_windows.feature_order is required in the config.")
     output_root = Path(output.get("root", "outputs/default"))
     model_window_dirname = str(output.get("model_window_dirname", "model_windows"))
-    dataset_dir = output_root / model_window_dirname / ("window_size=%d" % resolved_window_size)
-    if not dataset_dir.exists():
-        raise FileNotFoundError("Model-window dataset not found: %s" % dataset_dir)
+    resolved_dataset_dir = dataset_dir or (output_root / model_window_dirname / ("window_size=%d" % resolved_window_size))
+    if not resolved_dataset_dir.exists():
+        raise FileNotFoundError("Model-window dataset not found: %s" % resolved_dataset_dir)
     return PipelineWindowConfig(
         config_path=config_path.resolve(),
         output_root=output_root,
@@ -277,7 +283,7 @@ def load_window_config(config_path: Path, window_size: Optional[int]) -> Pipelin
         manifest_dirname=str(output.get("manifest_dirname", "manifests")),
         feature_order=feature_order,
         window_size=resolved_window_size,
-        dataset_dir=dataset_dir,
+        dataset_dir=resolved_dataset_dir,
     )
 
 

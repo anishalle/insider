@@ -1,47 +1,52 @@
 # Visualize Signals
 
-This document describes the `visualize-signals` analysis command, what data it reads, what it writes, and how to run it on Juno.
+This document describes the `visualize-signals` report command, what it reads, what it writes, and how to run it without polluting the repo checkout.
 
 ## Purpose
 
-The command is intended for pre-model inspection of the processed Polymarket dataset.
+`visualize-signals` is a read-only analysis workflow for the processed dataset. It does not modify the parquet stages under `prepared_trades`, `labeled_user_trades`, `sequence_dataset`, or `model_windows`.
 
-It reads the non-windowed `labeled_user_trades` output, selects example true and false signals, renders static plots around those trades, and writes summary artifacts that make it easier to answer:
+It is meant to answer a few practical questions before deeper model work:
 
-- does the label actually line up with a visible market move
-- how imbalanced are the classes
+- do the strongest positive and negative labels line up with visible market moves
+- how imbalanced is the label distribution over time
 - how concentrated is the data across users and markets
-- does the dataset look feasible for training before deeper model work
-
-This is an analysis workflow, not a preprocessing stage. It does not modify the processed parquet.
+- does the current dataset look feasible for training
 
 ## Inputs
 
-Primary input:
+The command resolves paths from `[output].root` in the pipeline config:
 
-- `processed/labeled_user_trades`
+- primary input: `labeled_user_trades`
+- plot-context input: `prepared_trades`
+- optional readiness input: `model_windows/window_size=<N>`
 
-Context input for the price series plots:
+## Default Output Location
 
-- `processed/prepared_trades`
+If you do not pass `--output-dir`, the command writes its report bundle to:
 
-Optional secondary input for training-readiness summaries:
+```text
+<output.root>/reports/signal-review
+```
 
-- `processed/model_windows/window_size=<N>`
+With the repo’s default Juno config, that resolves to:
 
-The command uses the same config file as the preprocessing pipeline and resolves dataset locations from `[output].root`.
+```text
+/home/axa230262/scratch/insider/processed/reports/signal-review
+```
 
-## Command
+This keeps generated plots and CSVs out of the git checkout.
 
-Local example:
+## Commands
+
+Local shape:
 
 ```bash
 uv run insider visualize-signals \
-  --config configs/pipeline.toml \
-  --output-dir "/home/axa230262/work/001 research/insider/analysis/signal-review"
+  --config configs/pipeline.toml
 ```
 
-Direct Juno example:
+Direct Juno run:
 
 ```bash
 cd "/home/axa230262/work/001 research/insider"
@@ -49,7 +54,6 @@ bash scripts/bootstrap-juno-env.sh
 . .venv/bin/activate
 python -m insider visualize-signals \
   --config configs/pipeline.toml \
-  --output-dir "/home/axa230262/work/001 research/insider/analysis/signal-review" \
   --examples-per-class 4 \
   --ambiguous-examples 2 \
   --lookback-minutes 60 \
@@ -57,11 +61,17 @@ python -m insider visualize-signals \
   --model-window-size 50
 ```
 
+Override the destination only when you intentionally want a non-default report location:
+
+```bash
+python -m insider visualize-signals \
+  --config configs/pipeline.toml \
+  --output-dir "/some/other/report/path"
+```
+
 ## Outputs
 
-The command writes a review bundle under the requested output directory.
-
-Expected files:
+Expected files in the report directory:
 
 - `summary.json`
 - `training_feasibility.json`
@@ -69,58 +79,20 @@ Expected files:
 - `candidate_signals.csv`
 - `plots/*.png`
 
-### `summary.json`
+`summary.json` includes overall labeled-row counts, class balance, distinct users/markets/assets, time coverage, and markout percentiles.
 
-Contains:
+`training_feasibility.json` includes:
 
-- total labeled rows
-- positive and negative counts
-- positive rate and imbalance ratios
-- distinct users, markets, and assets
-- overall time coverage
-- markout, markout-bps, and USD notional percentiles
-
-### `training_feasibility.json`
-
-Contains:
-
-- training verdict:
-  - `feasible_now`
-  - `feasible_with_weighting_or_sampling`
-  - `blocked_for_training`
-- monthly label-rate drift summary
+- dataset-integrity checks
+- monthly label-rate drift
 - user and market concentration summaries
-- user-market stream length buckets
-- estimated 50-step window coverage from `labeled_user_trades`
-- actual `model_windows` split counts and shape checks when that dataset exists
+- stream-length buckets
+- estimated window coverage from `labeled_user_trades`
+- actual `model_windows` shape and manifest checks when that dataset exists
 
-### `candidate_signals.csv`
+`candidate_signals.csv` contains one row per selected example, including the label, selection reason, user, market, asset, role, side, markout values, and transaction identifiers.
 
-One row per selected example, including:
-
-- class label
-- selection reason
-- user
-- market
-- asset
-- role and side
-- trade time
-- target time
-- future trade time
-- markout and markout-bps
-- USD and token size
-- transaction and order hashes
-
-### `plots/*.png`
-
-Each plot shows:
-
-- YES price path around the selected trade
-- the selected trade marker
-- the forward target time marker
-- the realized future price marker
-- a lower panel for surrounding USD notional spikes
-- a compact annotation block with the trade metadata and markout
+Each plot shows the YES price path around the selected trade, the selected trade marker, the forward target marker, the realized future-price marker, and surrounding notional spikes.
 
 ## Selection Logic
 
@@ -128,9 +100,7 @@ By default the command emits a mixed review set:
 
 - strongest positive examples by `markout_bps`
 - strongest negative examples by `markout_bps`
-- a small near-zero markout bucket for ambiguous calibration cases
-
-This is intended to give a quick visual read on obvious signals, obvious misses, and borderline examples.
+- a small near-zero-markout bucket for ambiguous calibration cases
 
 ## Juno Batch Workflow
 
@@ -145,12 +115,12 @@ cd "/home/axa230262/work/001 research/insider"
 sbatch jobs/analysis/run-visualize-signals-dev.sbatch
 ```
 
-Current behavior of the batch script:
+Current batch-script behavior:
 
 1. changes into the Juno repo checkout
 2. creates `logs/`
 3. bootstraps the repo-local `.venv`
 4. runs `python -m insider visualize-signals`
-5. writes review artifacts under `/home/axa230262/work/001 research/insider/analysis/signal-review`
+5. writes the report bundle under `<output.root>/reports/signal-review`
 
 The dev script intentionally does not set mail flags.

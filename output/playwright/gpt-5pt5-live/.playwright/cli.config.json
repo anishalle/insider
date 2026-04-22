@@ -1,0 +1,19 @@
+{
+  "browser": {
+    "launchOptions": {
+      "headless": false,
+      "args": [
+        "--disable-extensions-except=/Users/ani/workspaces/github.com/anishalle/insider/extension/dist",
+        "--load-extension=/Users/ani/workspaces/github.com/anishalle/insider/extension/dist",
+        "--no-first-run",
+        "--no-default-browser-check"
+      ]
+    },
+    "contextOptions": {
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      }
+    }
+  }
+}

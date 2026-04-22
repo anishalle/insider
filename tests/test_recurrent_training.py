@@ -122,6 +122,7 @@ def test_lstm_trainer_writes_expected_artifacts(tmp_path: Path, monkeypatch: pyt
     assert summary["model_config"]["debug_metrics"] is True
     assert summary["feature_shift_report_path"] == "feature_shift.json"
     assert summary["provenance"]["config_path"] == str(config_path.resolve())
+    assert "git_dirty" in summary["provenance"]
     assert metrics["validation"]["row_count"] == 2
     assert metrics["test"]["row_count"] == 2
     assert metrics["validation"]["pr_auc"] >= 0.0

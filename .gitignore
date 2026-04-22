@@ -13,5 +13,10 @@ outputs/
 markout_outputs/
 tmp/
 main.ipynb
+analysis/model-audit.csv
+analysis/model-audit-*.csv
+analysis/model-leaderboard.csv
+analysis/model-leaderboard-*.csv
+analysis/signal-review/
 
 *.egg-info/

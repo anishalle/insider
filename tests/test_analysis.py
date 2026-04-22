@@ -16,7 +16,7 @@ def test_visualize_signals_writes_summary_candidates_and_plots(tmp_path: Path) -
     trades_path = tmp_path / "trades.parquet"
     output_root = tmp_path / "outputs"
     config_path = tmp_path / "pipeline.toml"
-    analysis_dir = tmp_path / "analysis"
+    analysis_dir = output_root / "reports" / "signal-review"
 
     table = pa.table(
         {
@@ -95,7 +95,6 @@ def test_visualize_signals_writes_summary_candidates_and_plots(tmp_path: Path) -
 
     result_dir = visualize_signals(
         config,
-        output_dir=analysis_dir,
         examples_per_class=2,
         ambiguous_examples=1,
         lookback_minutes=15,

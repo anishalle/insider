@@ -43,13 +43,21 @@ class WindowConfig:
     window_size: int
     feature_order: Tuple[str, ...]
     runtime: RuntimeConfig
+    dataset_dir_override: Path | None = None
 
     @property
     def dataset_dir(self) -> Path:
+        if self.dataset_dir_override is not None:
+            return self.dataset_dir_override
         return self.output_root / self.model_window_dirname / ("window_size=%d" % self.window_size)
 
 
-def load_window_config(config_path: Path, window_size: Optional[int] = None) -> WindowConfig:
+def load_window_config(
+    config_path: Path,
+    window_size: Optional[int] = None,
+    *,
+    dataset_dir: Path | None = None,
+) -> WindowConfig:
     raw = _load_pipeline_toml(config_path)
     output_raw = raw.get("output", {})
     runtime_raw = raw.get("runtime", {})
@@ -74,6 +82,7 @@ def load_window_config(config_path: Path, window_size: Optional[int] = None) -> 
         window_size=resolved_window_size,
         feature_order=feature_order,
         runtime=runtime,
+        dataset_dir_override=dataset_dir,
     )
 
 

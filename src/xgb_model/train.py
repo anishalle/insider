@@ -50,6 +50,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="xgb_model.train", description="Train XGBoost on flattened model windows.")
     parser.add_argument("--config", type=Path, required=True, help="Path to configs/pipeline.toml")
     parser.add_argument("--window-size", type=int, default=None, help="Model window size to train on.")
+    parser.add_argument("--dataset-dir", type=Path, default=None, help="Optional override for the model-window dataset directory.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Optional run directory override.")
     parser.add_argument("--batch-size", type=int, default=8192, help="Batch size used while materializing splits.")
     parser.add_argument("--eval-batch-size", type=int, default=16384, help="Batch size used for evaluation loads.")
@@ -75,7 +76,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    config = load_window_config(args.config, window_size=args.window_size)
+    config = load_window_config(args.config, window_size=args.window_size, dataset_dir=args.dataset_dir)
     result = train_xgboost(
         config=config,
         output_dir=args.output_dir,

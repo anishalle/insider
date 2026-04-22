@@ -1,5 +1,9 @@
 # Windowing Run Reference
 
+Historical snapshot only: this note describes the April 6, 2026 `window_size=50` dataset build that produced the older `50 x 7`, `7,481,187`-row model-window dataset.
+
+The live Juno manifest no longer matches this snapshot. As of April 21, 2026, `/home/axa230262/scratch/insider/processed/manifests/build_model_windows_50.json` reports the newer `50 x 16`, `3,751,000`-row dataset. Use the live manifest for current work and this dated note only when interpreting older April 7, 2026 model runs.
+
 This document records how the `window_size=50` model-window dataset is produced and what was verified on Juno on April 6, 2026.
 
 It is based on the actual output present on Juno under:

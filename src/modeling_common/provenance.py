@@ -53,6 +53,30 @@ def git_sha(start_path: Optional[Path]) -> Optional[str]:
     return value or None
 
 
+def git_status_porcelain(start_path: Optional[Path]) -> Optional[str]:
+    repo_root = find_repo_root(start_path)
+    if repo_root is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+    return result.stdout.strip()
+
+
+def git_dirty(start_path: Optional[Path]) -> Optional[bool]:
+    status = git_status_porcelain(start_path)
+    if status is None:
+        return None
+    return bool(status)
+
+
 def find_dataset_manifest_path(
     output_root: Path,
     dataset_dir: Path,
@@ -107,6 +131,7 @@ def build_run_provenance(
     return {
         "generated_at_utc": generated_at_utc or utc_now_iso(),
         "git_sha": git_sha(config_path or output_root),
+        "git_dirty": git_dirty(config_path or output_root),
         "config_path": str(config_path.resolve()) if config_path is not None else None,
         "config_hash": config_hash(config_path),
         "dataset_dir": str(dataset_dir) if dataset_dir is not None else None,
@@ -127,6 +152,7 @@ def build_stage_provenance(
     return {
         "generated_at_utc": generated_at_utc or utc_now_iso(),
         "git_sha": git_sha(config_path or output_root),
+        "git_dirty": git_dirty(config_path or output_root),
         "config_path": str(config_path.resolve()) if config_path is not None else None,
         "config_hash": config_hash(config_path),
     }

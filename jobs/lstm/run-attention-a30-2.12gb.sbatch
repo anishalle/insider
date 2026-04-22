@@ -8,12 +8,13 @@
 #SBATCH -e logs/slurm-%j.err
 
 cd "$HOME/work/001 research/insider"
-mkdir -p logs analysis
+mkdir -p logs
 
 source ~/.bashrc
 eval "$(conda shell.bash hook)"
 conda activate g_retriever
 set -euo pipefail
+bash scripts/require-clean-repo.sh "$PWD"
 bash scripts/bootstrap-model-env.sh "$PWD" 1
 export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 
@@ -37,5 +38,4 @@ conda deactivate || true
 bash scripts/bootstrap-juno-env.sh
 . .venv/bin/activate
 python -m insider build-model-leaderboard \
-  --config configs/pipeline.toml \
-  --output-path "$HOME/work/001 research/insider/analysis/model-leaderboard.csv"
+  --config configs/pipeline.toml

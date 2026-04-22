@@ -1,0 +1,139 @@
+{
+  "testedAt": "2026-04-22T02:30:14.860Z",
+  "targetUrl": "https://polymarket.com/event/gpt-5pt5-released-by",
+  "extensionId": "lnfebajdkgggdefkdbpicfcbfgdjdchg",
+  "activeTabs": [
+    {
+      "id": 563586656,
+      "url": "https://polymarket.com/event/gpt-5pt5-released-by",
+      "title": "GPT-5.5 released by...? Trading Odds & Predictions 2026 | Polymarket"
+    }
+  ],
+  "storageKeys": [
+    "insider:market-state:0x14ee9bcf3b2170da60a8da2e1216d64dfa7b93e9df94e79404edf657f78839e4",
+    "insider:tab-condition:563586656",
+    "insider:tab-context:563586656"
+  ],
+  "marketStateKey": "insider:market-state:0x14ee9bcf3b2170da60a8da2e1216d64dfa7b93e9df94e79404edf657f78839e4",
+  "snapshotMode": "live",
+  "marketQuestion": "GPT-5.5 released by June 30, 2026?",
+  "suspiciousWallets": [
+    {
+      "walletAddress": "0xa069054595969bd74a9d16df12e83ca40198718d",
+      "combinedScore": 56.98,
+      "reasons": [
+        "Market-Relative Size.",
+        "Order-Flow Pressure.",
+        "Wallet-Relative Size."
+      ]
+    },
+    {
+      "walletAddress": "0xc6393f5177345cf7b9d9f3fbb782fd72da00c5a2",
+      "combinedScore": 54.82,
+      "reasons": [
+        "Market-Relative Size.",
+        "Order-Flow Pressure.",
+        "Wallet-Relative Size."
+      ]
+    },
+    {
+      "walletAddress": "0x6a5e991a877c9c3647b4b47c5b2c637e0e01c8c1",
+      "combinedScore": 54.73,
+      "reasons": [
+        "Market-Relative Size.",
+        "Order-Flow Pressure.",
+        "Wallet-Relative Size."
+      ]
+    },
+    {
+      "walletAddress": "0x9aeb534c42b58b21673d5e03e9da14fbd15b2729",
+      "combinedScore": 54.59,
+      "reasons": [
+        "Market-Relative Size.",
+        "Order-Flow Pressure.",
+        "Wallet-Relative Size."
+      ]
+    },
+    {
+      "walletAddress": "0x5999ebfa145490e0280dd246856a5b3605f7ae94",
+      "combinedScore": 54.51,
+      "reasons": [
+        "Market-Relative Size.",
+        "Order-Flow Pressure.",
+        "Wallet-Relative Size."
+      ]
+    }
+  ],
+  "linkedPairs": [
+    {
+      "pairKey": "0x1e28a62fa846f0c6b8a6d4f14045fe9495791807|0x3112efa1ecaf4ee327e04cd7fe73e007921f568a",
+      "score": 83,
+      "evidence": [
+        "Entered the market in a tight time window.",
+        "Built exposure on the same outcome.",
+        "Exits were synchronized."
+      ]
+    },
+    {
+      "pairKey": "0xc624bae75542797e57798edb0f91c5b61c91dfdd|0xf757a0ef49a37745167d75421eaaa89192fb352e",
+      "score": 83,
+      "evidence": [
+        "Entered the market in a tight time window.",
+        "Built exposure on the same outcome.",
+        "Exits were synchronized."
+      ]
+    },
+    {
+      "pairKey": "0x646f55ac7c218c82f3813f2c4c48451c2745cd8e|0xa9528ffcf286374ab87c48f26c835828c70607f4",
+      "score": 83,
+      "evidence": [
+        "Entered the market in a tight time window.",
+        "Built exposure on the same outcome.",
+        "Exits were synchronized."
+      ]
+    },
+    {
+      "pairKey": "0x0dcb809e0cd5255f8456f2d2c965c7884a8ce866|0x75eee1762cff455a0609bbd7c52e5ba2d7df5877",
+      "score": 82.98,
+      "evidence": [
+        "Entered the market in a tight time window.",
+        "Built exposure on the same outcome.",
+        "Exits were synchronized."
+      ]
+    },
+    {
+      "pairKey": "0x0438a6b68e6826aa2ba0d898f7eb4ad00f6f604e|0xa624963c8a45ffa8a27f536c725bc708410bd8af",
+      "score": 82.98,
+      "evidence": [
+        "Entered the market in a tight time window.",
+        "Built exposure on the same outcome.",
+        "Exits were synchronized."
+      ]
+    }
+  ],
+  "consoleMessages": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 422 ()"
+    },
+    {
+      "type": "warning",
+      "text": "@next/third-parties: GA has not been initialized"
+    },
+    {
+      "type": "info",
+      "text": "[LaunchDarkly] LaunchDarkly client initialized"
+    },
+    {
+      "type": "error",
+      "text": "Connecting to 'https://googleads.g.doubleclick.net/pagead/viewthroughconversion/17709783969/?random=1320381030&cv=11&fst=1776824983417&bg=ffffff&guid=ON&async=1&en=conversion&gtm=45be64h1v9235922336z89242728359za20gzb9242728359zd9242728359xea&gcd=13l3l3l3l1l1&dma=0&tag_exp=0~115938465~115938468~117266401~117384405&u_w=1440&u_h=1100&url=https%3A%2F%2Fpolymarket.com%2Fevent%2Fgpt-5pt5-released-by&rcb=9&label=90JOCNT464kcEKG31_xB&capi=1&frm=0&tiba=GPT-5.5%20released%20by...%3F%20Trading%20Odds%20%26%20Predictions%202026%20%...Q5M2swJGnz8hdEiwA-P8T6VzLqWtLKn9PKgyTZGTyaIuGZZnCwl1AiLIhu126m3OdRL8ybxMnkhoCBsA&pscrd=IhMIu7vj77SAlAMVTukYAh3cqTHvMgwIA2IICAAQABgAIAAyDAgEYggIABAAGAAgADIMCAdiCAgAEAAYACAAMgwICGIICAAQABgAIAAyDAgJYggIABAAGAAgADIMCApiCAgAEAAYACAAMgwIAmIICAAQABgAIAAyDAgLYggIABAAGAAgADIMCBViCAgAEAAYACAAMgwIH2IICAAQABgAIAAyDAgTYggIABAAGAAgADIMCBJiCAgAEAAYACAAOhdodHRwczovL3BvbHltYXJrZXQuY29tL0JXQ2hBSThNQ2N6d1lRb09lNTdPdlZucm9lRWkwQXR0dm4wVndkN3B3Qjk4NDNpVDluWGhzMG5pcXBCSmVVMEFrVlYwUXlUclFwUy1hMnIteHBXX3B5cmRzegwICWIICAAQABgAIAA' violates the following Content Security Policy directive: \"connect-src 'self' https://*.polymarket.com https://*.polymarket.dev wss://*.polymarket.com wss://*.polymarket.dev https://*.walletconnect.com wss://*.walletconnect.com https://*.walletconnect.org wss://*.walletconnect.org https://*.amplitude.com https://*.alchemy.com https://*.alchemyapi.io https://assets.vercel.com https://vercel.live https://vercel.com https://cdp.customer.io https://vitals.vercel-insights.com https://*.magic.link https://*.intercom.io wss://*.intercom.io https://*.intercom-messenger.com wss://*.intercom-messenger.com https://*.intercomcdn.com https://*.intercomcdn.eu https://*.intercomusercontent.com https://polymarket-upload.s3.us-east-2.amazonaws.com https://polymarket-next-assets.s3.amazonaws.com https://*.coinbase.com https://*.vercel-scripts.com https://*.google-analytics.com https://www.google.com https://*.facebook.com https://*.facebook.net https://*.redditstatic.com https://*.reddit.com https://analytics.tiktok.com wss://ws-us3.pusher.com https://polygon-rpc.com https://browser-intake-datadoghq.eu https://browser-intake-datadoghq.com https://static.ads-twitter.com https://sentry.io https://api.moonpay.com https://static.moonpay.com https://*.fun.xyz wss://*.fun.xyz https://*.quiknode.pro https://*.base.org https://*.zksync.io https://*.daimo.com https://s3-us-west-2.amazonaws.com wss://*.walletlink.org https://*.liadm.com https://api.retention.com https://*.execute-api.us-west-2.amazonaws.com https://alocdn.com https://a.usbrowserspeed.com https://analytics-ipv6.tiktokw.us https://*.snapchat.com https://*.gist.build https://pro.ip-api.com https://www.googleadservices.com https://*.relay.link https://arb1.arbitrum.io https://mainnet.optimism.io https://56.rpc.thirdweb.com https://api.mainnet.abs.xyz https://*.eth https://*.llamarpc.com https://*.drpc.org https://*.publicnode.com https://*.gateway.tenderly.co https://*.meowrpc.com https://*.merkle.io https://*.monad.xyz https://1rpc.io https://rpc.hyperliquid.xyz https://rpc.hypurrscan.io https://rpc.ethereal.trade https://tiles.polymarket.com https://protomaps.github.io https://tile.openweathermap.org https://api.open-meteo.com https://cdn.jsdelivr.net https://*.platform.grcv.io https://*.grid.gg wss://*.grid.gg data:\". The action has been blocked."
+    },
+    {
+      "type": "error",
+      "text": "Fetch API cannot load https://googleads.g.doubleclick.net/pagead/viewthroughconversion/17709783969/?random=1320381030&cv=11&fst=1776824983417&bg=ffffff&guid=ON&async=1&en=conversion&gtm=45be64h1v9235922336z89242728359za20gzb9242728359zd9242728359xea&gcd=13l3l3l3l1l1&dma=0&tag_exp=0~115938465~115938468~117266401~117384405&u_w=1440&u_h=1100&url=https%3A%2F%2Fpolymarket.com%2Fevent%2Fgpt-5pt5-released-by&rcb=9&label=90JOCNT464kcEKG31_xB&capi=1&frm=0&tiba=GPT-5.5%20released%20by...%3F%20Trading%20Odds%20%26%20Predictions%202026%20%...Q5M2swJGnz8hdEiwA-P8T6VzLqWtLKn9PKgyTZGTyaIuGZZnCwl1AiLIhu126m3OdRL8ybxMnkhoCBsA&pscrd=IhMIu7vj77SAlAMVTukYAh3cqTHvMgwIA2IICAAQABgAIAAyDAgEYggIABAAGAAgADIMCAdiCAgAEAAYACAAMgwICGIICAAQABgAIAAyDAgJYggIABAAGAAgADIMCApiCAgAEAAYACAAMgwIAmIICAAQABgAIAAyDAgLYggIABAAGAAgADIMCBViCAgAEAAYACAAMgwIH2IICAAQABgAIAAyDAgTYggIABAAGAAgADIMCBJiCAgAEAAYACAAOhdodHRwczovL3BvbHltYXJrZXQuY29tL0JXQ2hBSThNQ2N6d1lRb09lNTdPdlZucm9lRWkwQXR0dm4wVndkN3B3Qjk4NDNpVDluWGhzMG5pcXBCSmVVMEFrVlYwUXlUclFwUy1hMnIteHBXX3B5cmRzegwICWIICAAQABgAIAA. Refused to connect because it violates the document's Content Security Policy."
+    }
+  ],
+  "pageErrors": [
+    "Minified React error #418; visit https://react.dev/errors/418?args[]=text&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings."
+  ]
+}

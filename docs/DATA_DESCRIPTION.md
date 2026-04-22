@@ -1,5 +1,7 @@
 # Polymarket Dataset Description
 
+This document describes the upstream raw parquet sources. For the generated pipeline outputs used by this repo, see [output_dataset.md](/Users/ani/workspaces/github.com/anishalle/insider/docs/output_dataset.md).
+
 Complete guide to the 5 parquet files in this dataset.
 
 ---

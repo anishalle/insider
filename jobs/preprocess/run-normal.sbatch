@@ -15,4 +15,5 @@ mkdir -p logs
 
 bash scripts/bootstrap-juno-env.sh
 . .venv/bin/activate
-python -m insider run-pipeline --config configs/pipeline.toml --overwrite
+CONFIG_PATH="${CONFIG_PATH:-configs/pipeline.toml}"
+python -m insider run-pipeline --config "$CONFIG_PATH" --overwrite

@@ -1,0 +1,82 @@
+[inputs]
+trades_path = "/home/axa230262/scratch/insider/trades.parquet"
+markets_path = "/home/axa230262/scratch/insider/markets.parquet"
+
+[output]
+root = "/home/axa230262/scratch/insider/processed_fixed_amounts_h5_bps5"
+prepared_dirname = "prepared_trades"
+labeled_dirname = "labeled_user_trades"
+sequence_dirname = "sequence_dataset"
+model_window_dirname = "model_windows"
+manifest_dirname = "manifests"
+
+[runtime]
+threads = 32
+memory_limit = "192GB"
+temp_directory = "/home/axa230262/scratch/insider/processed_fixed_amounts_h5_bps5/tmp/duckdb"
+preserve_insertion_order = false
+
+[label]
+horizon_minutes = 5
+usd_decimals = 0
+token_decimals = 0
+max_future_lag_seconds = 300
+min_abs_markout_bps = 5.0
+
+[sequence]
+length = 64
+stride = 16
+feature_order = [
+  "price_yes",
+  "signed_token_amount",
+  "usd_amount",
+  "side",
+  "role_is_maker",
+  "time_delta_seconds",
+  "market_age_seconds",
+  "market_trade_count_1h",
+  "market_volume_1h",
+  "market_price_mean_1h",
+  "market_price_std_1h",
+  "market_price_return_1h",
+  "user_trade_count_1h",
+  "user_market_trade_count_1h",
+  "user_signed_flow_1h",
+  "user_usd_volume_1h",
+]
+train_ratio = 0.8
+validation_ratio = 0.1
+test_ratio = 0.1
+purge_minutes = 60
+embargo_minutes = 60
+
+[model_windows]
+length = 50
+stride = 16
+feature_order = [
+  "price_yes",
+  "signed_token_amount",
+  "usd_amount",
+  "side",
+  "role_is_maker",
+  "time_delta_seconds",
+  "market_age_seconds",
+  "market_trade_count_1h",
+  "market_volume_1h",
+  "market_price_mean_1h",
+  "market_price_std_1h",
+  "market_price_return_1h",
+  "user_trade_count_1h",
+  "user_market_trade_count_1h",
+  "user_signed_flow_1h",
+  "user_usd_volume_1h",
+]
+train_ratio = 0.8
+validation_ratio = 0.1
+test_ratio = 0.1
+purge_minutes = 60
+embargo_minutes = 60
+
+[smoke]
+start = "2024-10-01T00:00:00Z"
+end = "2024-10-03T00:00:00Z"

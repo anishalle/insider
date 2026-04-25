@@ -15,4 +15,5 @@ mkdir -p logs
 
 bash scripts/bootstrap-juno-env.sh
 . .venv/bin/activate
-python -m insider build-model-windows --config configs/pipeline.toml --window-size 50 --overwrite
+CONFIG_PATH="${CONFIG_PATH:-configs/pipeline.toml}"
+python -m insider build-model-windows --config "$CONFIG_PATH" --window-size 50 --overwrite

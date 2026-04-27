@@ -4,7 +4,11 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 import hashlib
 from pathlib import Path
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python < 3.11
+    import tomli as tomllib  # type: ignore[no-redef]
 
 from insider.features import DEFAULT_CONTRACT_ADDRESSES, DEFAULT_FEATURE_ORDER
 

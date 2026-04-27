@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 required = {
+    "duckdb": "duckdb>=1.2.2",
     "numpy": "numpy>=2.0.0",
     "pyarrow": "pyarrow>=18.0.0",
     "sklearn": "scikit-learn>=1.5.0",
